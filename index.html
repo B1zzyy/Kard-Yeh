@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Konchina - Card Game</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js';
+        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updateProfile, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js';
+        import { getFirestore, collection, doc, setDoc, getDoc, updateDoc, increment } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js';
+        import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-storage.js';
+        
+        // Your web app's Firebase configuration (from Firebase Console)
+        const firebaseConfig = {
+            apiKey: "AIzaSyD2Kbns22IFgNd-iiS34JoI82aIRlwqbA4",
+            authDomain: "konchina-game.firebaseapp.com",
+            projectId: "konchina-game",
+            storageBucket: "konchina-game.firebasestorage.app",
+            messagingSenderId: "644418511089",
+            appId: "1:644418511089:web:12f2a3786c70bdf5d20950",
+            measurementId: "G-0098VWC88N"
+        };
+        
+        try {
+            // Initialize Firebase
+            console.log('=== INITIALIZING FIREBASE ===');
+            console.log('Firebase config:', firebaseConfig);
+            const app = initializeApp(firebaseConfig);
+            window.auth = getAuth(app);
+            window.db = getFirestore(app);
+            window.storage = getStorage(app);
+            
+            // Expose Firebase functions to global window object
+            window.createUserWithEmailAndPassword = createUserWithEmailAndPassword;
+            window.signInWithEmailAndPassword = signInWithEmailAndPassword;
+            window.signOut = signOut;
+            window.updateProfile = updateProfile;
+            window.onAuthStateChanged = onAuthStateChanged;
+            window.collection = collection;
+            window.doc = doc;
+            window.setDoc = setDoc;
+            window.getDoc = getDoc;
+            window.updateDoc = updateDoc;
+            window.increment = increment;
+            window.storageRef = ref;
+            window.uploadBytes = uploadBytes;
+            window.getDownloadURL = getDownloadURL;
+            window.deleteObject = deleteObject;
+            
+            // For development - uncomment these lines if using Firebase emulators
+            // connectAuthEmulator(window.auth, "http://localhost:9099");
+            // connectFirestoreEmulator(window.db, 'localhost', 8080);
+            
+            console.log('Firebase initialized successfully');
+        } catch (error) {
+            console.log('Firebase initialization failed, running in demo mode:', error);
+            // Demo mode will be handled by the authentication logic
+        }
+    </script>
+</head>
+<body>
+    <!-- Authentication Screen -->
+    <div id="auth-screen" class="screen">
+        <div class="auth-container">
+            <div class="auth-header">
+                <h1>Konchina</h1>
+                <p>The Ultimate Card Game Experience</p>
+            </div>
+            
+            <!-- Login Form -->
+            <div id="login-form" class="auth-form active">
+                <form id="login-form-element">
+                    <div class="input-group">
+                        <input type="email" id="login-email" placeholder="Email" required>
+                    </div>
+                    <div class="input-group">
+                        <input type="password" id="login-password" placeholder="Password" required>
+                    </div>
+                    <button type="submit" class="auth-btn primary">
+                        <span class="btn-text">Sign In</span>
+                        <span class="btn-loading" style="display: none;"></span>
+                    </button>
+                </form>
+            </div>
+            
+            <!-- Signup Form -->
+            <div id="signup-form" class="auth-form">
+                <form id="signup-form-element">
+                    <div class="input-group">
+                        <input type="text" id="signup-username" placeholder="Username" required>
+                    </div>
+                    <div class="input-group">
+                        <input type="email" id="signup-email" placeholder="Email" required>
+                    </div>
+                    <div class="input-group">
+                        <input type="password" id="signup-password" placeholder="Password (min 6 characters)" required>
+                    </div>
+                    <button type="submit" class="auth-btn primary">
+                        <span class="btn-text">Create Account</span>
+                        <span class="btn-loading" style="display: none;"></span>
+                    </button>
+                </form>
+            </div>
+            
+            <div class="auth-demo">
+                <div id="login-switch" class="auth-switch">
+                    <p>Don't have an account? 
+                    <a href="#" id="show-signup">Sign up</a></p>
+                </div>
+                <div id="signup-switch" class="auth-switch" style="display: none;">
+                    <p>Already have an account? 
+                    <a href="#" id="show-login">Sign in</a></p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="auth-background">
+            <div class="floating-cards"></div>
+        </div>
+    </div>
+
+    <!-- User Dashboard -->
+    <div id="user-dashboard" class="screen" style="display: none;">
+        <div class="dashboard-header">
+            <div class="user-info">
+                <div class="user-avatar-container">
+                    <div class="user-avatar" id="user-avatar">👤</div>
+                    <button class="avatar-edit-btn" id="avatar-edit-btn" title="Change profile picture">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 16C14.2091 16 16 14.2091 16 12C16 9.79086 14.2091 8 12 8C9.79086 8 8 9.79086 8 12C8 14.2091 9.79086 16 12 16Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M21 16V8C21 7.44772 20.5523 7 20 7H19L17 4H7L5 7H4C3.44772 7 3 7.44772 3 8V16C3 16.5523 3.44772 17 4 17H20C20.5523 17 21 16.5523 21 16Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </button>
+                    <input type="file" id="avatar-upload" accept="image/*" style="display: none;">
+                </div>
+                <div class="user-details">
+                    <h3 id="user-name">Player</h3>
+                    <div class="user-coins">
+                        <span class="coin-icon"><svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <path d="M14 10.5C14 11.8807 11.7614 13 9 13C6.23858 13 4 11.8807 4 10.5M14 10.5C14 9.11929 11.7614 8 9 8C6.23858 8 4 9.11929 4 10.5M14 10.5V14.5M4 10.5V14.5M20 5.5C20 4.11929 17.7614 3 15 3C13.0209 3 11.3104 3.57493 10.5 4.40897M20 5.5C20 6.42535 18.9945 7.23328 17.5 7.66554M20 5.5V14C20 14.7403 18.9945 15.3866 17.5 15.7324M20 10C20 10.7567 18.9495 11.4152 17.3999 11.755M14 14.5C14 15.8807 11.7614 17 9 17C6.23858 17 4 15.8807 4 14.5M14 14.5V18.5C14 19.8807 11.7614 21 9 21C6.23858 21 4 19.8807 4 18.5V14.5" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path> </g></svg></span>
+                        <span id="user-coin-count">10,000</span>
+                    </div>
+                </div>
+            </div>
+            <div class="header-buttons">
+                <button id="settings-btn" class="header-btn">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <circle cx="12" cy="12" r="3" stroke="#ffffff" stroke-width="1.5"></circle> <path d="M3.66122 10.6392C4.13377 10.9361 4.43782 11.4419 4.43782 11.9999C4.43781 12.558 4.13376 13.0638 3.66122 13.3607C3.33966 13.5627 3.13248 13.7242 2.98508 13.9163C2.66217 14.3372 2.51966 14.869 2.5889 15.3949C2.64082 15.7893 2.87379 16.1928 3.33973 16.9999C3.80568 17.8069 4.03865 18.2104 4.35426 18.4526C4.77508 18.7755 5.30694 18.918 5.83284 18.8488C6.07287 18.8172 6.31628 18.7185 6.65196 18.5411C7.14544 18.2803 7.73558 18.2699 8.21895 18.549C8.70227 18.8281 8.98827 19.3443 9.00912 19.902C9.02332 20.2815 9.05958 20.5417 9.15224 20.7654C9.35523 21.2554 9.74458 21.6448 10.2346 21.8478C10.6022 22 11.0681 22 12 22C12.9319 22 13.3978 22 13.7654 21.8478C14.2554 21.6448 14.6448 21.2554 14.8478 20.7654C14.9404 20.5417 14.9767 20.2815 14.9909 19.9021C15.0117 19.3443 15.2977 18.8281 15.7811 18.549C16.2644 18.27 16.8545 18.2804 17.3479 18.5412C17.6837 18.7186 17.9271 18.8173 18.1671 18.8489C18.693 18.9182 19.2249 18.7756 19.6457 18.4527C19.9613 18.2106 20.1943 17.807 20.6603 17C20.8677 16.6407 21.029 16.3614 21.1486 16.1272M20.3387 13.3608C19.8662 13.0639 19.5622 12.5581 19.5621 12.0001C19.5621 11.442 19.8662 10.9361 20.3387 10.6392C20.6603 10.4372 20.8674 10.2757 21.0148 10.0836C21.3377 9.66278 21.4802 9.13092 21.411 8.60502C21.3591 8.2106 21.1261 7.80708 20.6601 7.00005C20.1942 6.19301 19.9612 5.7895 19.6456 5.54732C19.2248 5.22441 18.6929 5.0819 18.167 5.15113C17.927 5.18274 17.6836 5.2814 17.3479 5.45883C16.8544 5.71964 16.2643 5.73004 15.781 5.45096C15.2977 5.1719 15.0117 4.6557 14.9909 4.09803C14.9767 3.71852 14.9404 3.45835 14.8478 3.23463C14.6448 2.74458 14.2554 2.35523 13.7654 2.15224C13.3978 2 12.9319 2 12 2C11.0681 2 10.6022 2 10.2346 2.15224C9.74458 2.35523 9.35523 2.74458 9.15224 3.23463C9.05958 3.45833 9.02332 3.71848 9.00912 4.09794C8.98826 4.65566 8.70225 5.17191 8.21891 5.45096C7.73557 5.73002 7.14548 5.71959 6.65205 5.4588C6.31633 5.28136 6.0729 5.18269 5.83285 5.15108C5.30695 5.08185 4.77509 5.22436 4.35427 5.54727C4.03866 5.78945 3.80569 6.19297 3.33974 7C3.13231 7.35929 2.97105 7.63859 2.85138 7.87273" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"></path> </g></svg>
+                </button>
+                <button id="logout-btn" class="header-btn">
+                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="#ffffff"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"><path d="M2 6a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v2a1 1 0 1 1-2 0V6H4v12h9v-2a1 1 0 1 1 2 0v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6zm15.293 2.293a1 1 0 0 1 1.414 0l3 3a1 1 0 0 1 0 1.414l-3 3a1 1 0 0 1-1.414-1.414L18.586 13H9a1 1 0 1 1 0-2h9.586l-1.293-1.293a1 1 0 0 1 0-1.414z" fill="#ffffff"></path></g></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Dashboard Player Stats Panel -->
+        <div class="dashboard-stats-overlay" id="dashboard-stats-overlay" style="display: none;">
+                     <div class="dashboard-stats-panel" id="dashboard-stats-panel">
+             <div class="player-stats-header">
+                 <div class="dashboard-stats-avatar" id="dashboard-stats-avatar">👤</div>
+                 <div class="player-stats-username" id="dashboard-stats-username">Player</div>
+                 <div class="player-stats-title">Game Statistics</div>
+             </div>
+                <div class="player-stats-content">
+                    <div class="stat-item wins">
+                        <div class="stat-number" id="dashboard-stats-wins">0</div>
+                        <div class="stat-label">Wins</div>
+                    </div>
+                    <div class="stat-item losses">
+                        <div class="stat-number" id="dashboard-stats-losses">0</div>
+                        <div class="stat-label">Losses</div>
+                    </div>
+                </div>
+                <div class="win-loss-ratio">
+                    <div class="ratio-label">Win/Loss Ratio</div>
+                    <div class="ratio-bar">
+                        <div class="ratio-fill" id="dashboard-ratio-fill"></div>
+                    </div>
+                    <div class="ratio-text" id="dashboard-ratio-text">0% wins</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="dashboard-content">
+            <div class="welcome-message">
+                <h2>Ready to Play?</h2>
+                <p>Choose your game mode and start earning coins!</p>
+            </div>
+            
+            <div class="game-modes">
+                <div class="mode-card">
+                    <h4>🎯 Practice Mode</h4>
+                    <p>Free play • No coin cost</p>
+                    <div class="mode-reward">Reward: Experience only</div>
+                </div>
+                <div class="mode-card featured">
+                    <h4>💰 Ranked Mode</h4>
+                    <p>Cost: 2500 coins</p>
+                    <div class="mode-reward">Win: +5000 coins</div>
+                </div>
+                <div class="mode-card">
+                    <h4>🏆 Tournament</h4>
+                    <p>Coming Soon!</p>
+                    <div class="mode-reward">Big prizes await</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Menu - HIDDEN (no longer used) -->
+    <div class="main-menu" id="main-menu" style="display: none;">
+        <div class="game-title">
+            <h1>KardYeh!</h1>
+            <p class="subtitle">Ultimate Card Game Experience</p>
+        </div>
+        
+        <div class="menu-container">
+            <h2>Select Number of Opponents</h2>
+            <div class="player-options">
+                <button class="player-btn" data-players="1">
+                    <span class="player-count">1</span>
+                    <span class="player-label">Opponent</span>
+                </button>
+                <button class="player-btn" data-players="2">
+                    <span class="player-count">2</span>
+                    <span class="player-label">Opponents</span>
+                </button>
+                <button class="player-btn" data-players="3">
+                    <span class="player-count">3</span>
+                    <span class="player-label">Opponents</span>
+                </button>
+                <button class="player-btn" data-players="4">
+                    <span class="player-count">4</span>
+                    <span class="player-label">Opponents</span>
+                </button>
+            </div>
+            
+            <div class="additional-options">
+                <button class="option-btn" id="settings-btn">
+                    <span>⚙️</span>
+                    Settings
+                </button>
+                <button class="option-btn" id="rules-btn">
+                    <span>📖</span>
+                    Rules
+                </button>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>Playing against AI opponents • Multiplayer coming soon!</p>
+        </div>
+    </div>
+
+    <!-- AI Difficulty Selection - HIDDEN (no longer used) -->
+    <div class="difficulty-menu" id="difficulty-menu" style="display: none;">
+        <div class="game-title">
+            <h1>KardYeh!</h1>
+            <p class="subtitle">Choose AI Difficulty</p>
+        </div>
+        
+        <div class="menu-container">
+            <h2>Select Difficulty Level</h2>
+            <div class="difficulty-options">
+                <button class="difficulty-btn" data-difficulty="easy">
+                    <span class="difficulty-icon">🟢</span>
+                    <span class="difficulty-name">Easy</span>
+                    <span class="difficulty-desc">Perfect for beginners</span>
+                </button>
+                <button class="difficulty-btn" data-difficulty="medium">
+                    <span class="difficulty-icon">🟡</span>
+                    <span class="difficulty-name">Medium</span>
+                    <span class="difficulty-desc">Balanced challenge</span>
+                </button>
+                <button class="difficulty-btn" data-difficulty="hard">
+                    <span class="difficulty-icon">🔴</span>
+                    <span class="difficulty-name">Hard</span>
+                    <span class="difficulty-desc">For experienced players</span>
+                </button>
+                <button class="difficulty-btn" data-difficulty="expert">
+                    <span class="difficulty-icon">🟣</span>
+                    <span class="difficulty-name">Expert</span>
+                    <span class="difficulty-desc">Ultimate challenge</span>
+                </button>
+            </div>
+            
+            <div class="back-button-container">
+                <button class="back-btn" id="back-to-main">
+                    <span>←</span>
+                    Back
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Screen -->
+    <div class="loading-screen" id="loading-screen" style="display: none;">
+        <div class="loading-container">
+            <h2>Preparing Your Game</h2>
+            <div class="loading-bar-container">
+                <div class="loading-bar" id="loading-bar"></div>
+            </div>
+            <div class="loading-text" id="loading-text">Loading graphics...</div>
+        </div>
+    </div>
+
+    <!-- Game Area -->
+    <div class="game-area" id="game-area" style="display: none;">
+        <!-- Exit Game Button -->
+        <button id="exit-game-btn" class="header-btn exit-game-btn">
+            <svg viewBox="0 0 24 24" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" fill="#ffffff" stroke="#ffffff"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <title>entrance_fill</title> <g id="页面-1" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd"> <g id="System" transform="translate(-672.000000, -144.000000)" fill-rule="nonzero"> <g id="entrance_fill" transform="translate(672.000000, 144.000000)"> <path d="M24,0 L24,24 L0,24 L0,0 L24,0 Z M12.5934901,23.257841 L12.5819402,23.2595131 L12.5108777,23.2950439 L12.4918791,23.2987469 L12.4918791,23.2987469 L12.4767152,23.2950439 L12.4056548,23.2595131 C12.3958229,23.2563662 12.3870493,23.2590235 12.3821421,23.2649074 L12.3780323,23.275831 L12.360941,23.7031097 L12.3658947,23.7234994 L12.3769048,23.7357139 L12.4804777,23.8096931 L12.4953491,23.8136134 L12.4953491,23.8136134 L12.5071152,23.8096931 L12.6106902,23.7357139 L12.6232938,23.7196733 L12.6232938,23.7196733 L12.6266527,23.7031097 L12.609561,23.275831 C12.6075724,23.2657013 12.6010112,23.2592993 12.5934901,23.257841 L12.5934901,23.257841 Z M12.8583906,23.1452862 L12.8445485,23.1473072 L12.6598443,23.2396597 L12.6498822,23.2499052 L12.6498822,23.2499052 L12.6471943,23.2611114 L12.6650943,23.6906389 L12.6699349,23.7034178 L12.6699349,23.7034178 L12.678386,23.7104931 L12.8793402,23.8032389 C12.8914285,23.8068999 12.9022333,23.8029875 12.9078286,23.7952264 L12.9118235,23.7811639 L12.8776777,23.1665331 C12.8752882,23.1545897 12.8674102,23.1470016 12.8583906,23.1452862 L12.8583906,23.1452862 Z M12.1430473,23.1473072 C12.1332178,23.1423925 12.1221763,23.1452606 12.1156365,23.1525954 L12.1099173,23.1665331 L12.0757714,23.7811639 C12.0751323,23.7926639 12.0828099,23.8018602 12.0926481,23.8045676 L12.108256,23.8032389 L12.3092106,23.7104931 L12.3186497,23.7024347 L12.3186497,23.7024347 L12.3225043,23.6906389 L12.340401,23.2611114 L12.337245,23.2485176 L12.337245,23.2485176 L12.3277531,23.2396597 L12.1430473,23.1473072 Z" id="MingCute" fill-rule="nonzero"> </path> <path d="M12,2.5 C12.8284,2.5 13.5,3.17157 13.5,4 C13.5,4.82843 12.8284,5.5 12,5.5 L12,5.5 L7,5.5 C6.72386,5.5 6.5,5.72386 6.5,6 L6.5,6 L6.5,18 C6.5,18.2761 6.72386,18.5 7,18.5 L7,18.5 L11.5,18.5 C12.3284,18.5 13,19.1716 13,20 C13,20.8284 12.3284,21.5 11.5,21.5 L11.5,21.5 L7,21.5 C5.067,21.5 3.5,19.933 3.5,18 L3.5,18 L3.5,6 C3.5,4.067 5.067,2.5 7,2.5 L7,2.5 Z M18.0606,8.11091 L20.889,10.9393 C21.4748,11.5251 21.4748,12.4749 20.889,13.0607 L18.0606,15.8891 C17.4748,16.4749 16.5251,16.4749 15.9393,15.8891 C15.3535,15.3033 15.3535,14.3536 15.9393,13.7678 L16.207,13.5 L12,13.5 C11.1716,13.5 10.5,12.8284 10.5,12 C10.5,11.1716 11.1716,10.5 12,10.5 L16.207,10.5 L15.9393,10.2322 C15.3535,9.64645 15.3535,8.6967 15.9393,8.11091 C16.5251,7.52513 17.4748,7.52513 18.0606,8.11091 Z" id="形状结合" fill="#ffffff"> </path> </g> </g> </g> </g></svg>
+        </button>
+        
+        <div class="opponent-area">
+            <div class="opponent-cards" id="opponent-cards"></div>
+            <div class="opponent-info">
+                <div class="opponent-avatar-container">
+                    <div class="opponent-avatar" id="opponent-avatar">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="#ffffff"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <path d="M9 15C8.44771 15 8 15.4477 8 16C8 16.5523 8.44771 17 9 17C9.55229 17 10 16.5523 10 16C10 15.4477 9.55229 15 9 15Z" fill="#ffffff"></path> <path d="M14 16C14 15.4477 14.4477 15 15 15C15.5523 15 16 15.4477 16 16C16 16.5523 15.5523 17 15 17C14.4477 17 14 16.5523 14 16Z" fill="#ffffff"></path> <path fill-rule="evenodd" clip-rule="evenodd" d="M12 1C10.8954 1 10 1.89543 10 3C10 3.74028 10.4022 4.38663 11 4.73244V7H6C4.34315 7 3 8.34315 3 10V20C3 21.6569 4.34315 23 6 23H18C19.6569 23 21 21.6569 21 20V10C21 8.34315 19.6569 7 18 7H13V4.73244C13.5978 4.38663 14 3.74028 14 3C14 1.89543 13.1046 1 12 1ZM5 10C5 9.44772 5.44772 9 6 9H7.38197L8.82918 11.8944C9.16796 12.572 9.86049 13 10.618 13H13.382C14.1395 13 14.832 12.572 15.1708 11.8944L16.618 9H18C18.5523 9 19 9.44772 19 10V20C19 20.5523 18.5523 21 18 21H6C5.44772 21 5 20.5523 5 20V10ZM13.382 11L14.382 9H9.61803L10.618 11H13.382Z" fill="#ffffff"></path> <path d="M1 14C0.447715 14 0 14.4477 0 15V17C0 17.5523 0.447715 18 1 18C1.55228 18 2 17.5523 2 17V15C2 14.4477 1.55228 14 1 14Z" fill="#ffffff"></path> <path d="M22 15C22 14.4477 22.4477 14 23 14C23.5523 14 24 14.4477 24 15V17C24 17.5523 23.5523 18 23 18C22.4477 18 22 17.5523 22 17V15Z" fill="#ffffff"></path> </g></svg>
+                    </div>
+                </div>
+                <span class="opponent-name" id="opponent-name">AI Opponent</span>
+            </div>
+        </div>
+        
+        <div class="center-area">
+            <div class="deck-area">
+                <div class="deck" id="deck"></div>
+            </div>
+        </div>
+        
+        <div class="player-area">
+            <div class="player-cards" id="player-cards"></div>
+            <div class="player-info">
+                <div class="player-avatar-container">
+                    <div class="player-avatar" id="player-avatar">👤</div>
+                    <div class="player-stats-panel" id="player-stats-panel">
+                        <div class="player-stats-header">
+                            <div class="player-stats-username" id="stats-username">Player</div>
+                            <div class="player-stats-title">Game Statistics</div>
+                        </div>
+                        <div class="player-stats-content">
+                            <div class="stat-item wins">
+                                <div class="stat-number" id="stats-wins">0</div>
+                                <div class="stat-label">Wins</div>
+                            </div>
+                            <div class="stat-item losses">
+                                <div class="stat-number" id="stats-losses">0</div>
+                                <div class="stat-label">Losses</div>
+                            </div>
+                        </div>
+                        <div class="win-loss-ratio">
+                            <div class="ratio-label">Win/Loss Ratio</div>
+                            <div class="ratio-bar">
+                                <div class="ratio-fill" id="ratio-fill"></div>
+                            </div>
+                            <div class="ratio-text" id="ratio-text">0% wins</div>
+                        </div>
+                    </div>
+                </div>
+                <span class="player-name" id="player-name">You</span>
+            </div>
+        </div>
+
+        <!-- Winning Popup Overlay -->
+        <div class="winning-popup-overlay" id="winning-popup-overlay" style="display: none;">
+            <div class="winning-popup">
+                <div class="winning-popup-content">
+                    <div class="trophy-icon">
+                        <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" style="enable-background:new 0 0 1024 1024" xml:space="preserve" fill="#000000">
+                            <g id="SVGRepo_bgCarrier" stroke-width="0"></g>
+                            <g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g>
+                            <g id="SVGRepo_iconCarrier">
+                                <path d="M918.4 201.6c-6.4-6.4-12.8-9.6-22.4-9.6H768V96c0-9.6-3.2-16-9.6-22.4C752 67.2 745.6 64 736 64H288c-9.6 0-16 3.2-22.4 9.6C259.2 80 256 86.4 256 96v96H128c-9.6 0-16 3.2-22.4 9.6-6.4 6.4-9.6 16-9.6 22.4 3.2 108.8 25.6 185.6 64 224 34.4 34.4 77.56 55.65 127.65 61.99 10.91 20.44 24.78 39.25 41.95 56.41 40.86 40.86 91 65.47 150.4 71.9V768h-96c-9.6 0-16 3.2-22.4 9.6-6.4 6.4-9.6 12.8-9.6 22.4s3.2 16 9.6 22.4c6.4 6.4 12.8 9.6 22.4 9.6h256c9.6 0 16-3.2 22.4-9.6 6.4-6.4 9.6-12.8 9.6-22.4s-3.2-16-9.6-22.4c-6.4-6.4-12.8-9.6-22.4-9.6h-96V637.26c59.4-7.71 109.54-30.01 150.4-70.86 17.2-17.2 31.51-36.06 42.81-56.55 48.93-6.51 90.02-27.7 126.79-61.85 38.4-38.4 60.8-112 64-224 0-6.4-3.2-16-9.6-22.4zM256 438.4c-19.2-6.4-35.2-19.2-51.2-35.2-22.4-22.4-35.2-70.4-41.6-147.2H256v182.4zm390.4 80C608 553.6 566.4 576 512 576s-99.2-19.2-134.4-57.6C342.4 480 320 438.4 320 384V128h384v256c0 54.4-19.2 99.2-57.6 134.4zm172.8-115.2c-16 16-32 25.6-51.2 35.2V256h92.8c-6.4 76.8-19.2 124.8-41.6 147.2zM768 896H256c-9.6 0-16 3.2-22.4 9.6-6.4 6.4-9.6 12.8-9.6 22.4s3.2 16 9.6 22.4c6.4 6.4 12.8 9.6 22.4 9.6h512c9.6 0 16-3.2 22.4-9.6 6.4-6.4 9.6-12.8 9.6-22.4s-3.2-16-9.6-22.4c-6.4-6.4-12.8-9.6-22.4-9.6z" fill="#ffffff"></path>
+                            </g>
+                        </svg>
+                    </div>
+                    <h1 class="winning-title" id="winning-title">You Win!</h1>
+                    <div class="final-score" id="final-score">
+                        <p>Final Score</p>
+                        <div class="score-display">
+                            <span id="player-final-score">16</span> - <span id="opponent-final-score">12</span>
+                        </div>
+                    </div>
+                    <div class="winning-message" id="winning-message">
+                        Congratulations! You've mastered Konchina!
+                    </div>
+                    <div class="winning-buttons">
+                        <button class="play-again-btn" id="play-again-btn">
+                            Play Again?
+                        </button>
+                        <button class="main-menu-btn" id="main-menu-btn">
+                            Main Menu
+                        </button>
+                    </div>
+                </div>
+                <div class="confetti-container" id="confetti-container"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Winning Screen -->
+    <div class="winning-screen" id="winning-screen" style="display: none;">
+        <div class="winning-container">
+            <div class="winning-content">
+                <div class="trophy-icon">🏆</div>
+                <h1 class="winning-title" id="winning-title">You Win!</h1>
+                <div class="final-score" id="final-score">
+                    <p>Final Score</p>
+                    <div class="score-display">
+                        <span id="player-final-score">16</span> - <span id="opponent-final-score">12</span>
+                    </div>
+                </div>
+                <div class="winning-message" id="winning-message">
+                    Congratulations! You've mastered Konchina!
+                </div>
+                <div class="winning-buttons">
+                    <button class="play-again-btn" id="play-again-btn">
+                        <span>🎮</span>
+                        Play Again?
+                    </button>
+                    <button class="main-menu-btn" id="main-menu-btn">
+                        <span>🏠</span>
+                        Main Menu
+                    </button>
+                </div>
+            </div>
+            <div class="confetti-container" id="confetti-container"></div>
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html> 
