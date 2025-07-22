@@ -2864,7 +2864,189 @@ body::before {
 .dashboard-stats-avatar.has-image {
     background-image: var(--avatar-url);
     font-size: 0;
-} 
+}
+
+.player-stats-header {
+    text-align: center;
+    color: white;
+}
+
+.player-stats-username {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin-bottom: 5px;
+}
+
+.player-stats-title {
+    color: #64748b;
+    font-size: 0.9rem;
+    margin-bottom: 20px;
+}
+
+.player-stats-content {
+    display: flex;
+    justify-content: space-around;
+    margin-bottom: 25px;
+}
+
+.stat-item {
+    text-align: center;
+}
+
+.stat-number {
+    font-size: 2rem;
+    font-weight: 700;
+    margin-bottom: 5px;
+}
+
+.stat-item.wins .stat-number {
+    color: #10b981;
+}
+
+.stat-item.losses .stat-number {
+    color: #ef4444;
+}
+
+.stat-label {
+    color: #64748b;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.win-loss-ratio {
+    margin-top: 15px;
+    padding-top: 15px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.ratio-label {
+    color: #64748b;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+    text-align: center;
+}
+
+.ratio-bar {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+    margin-bottom: 8px;
+}
+
+.ratio-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    background: linear-gradient(90deg, #ef4444 0%, #ef4444 var(--loss-percent, 0%), #10b981 var(--loss-percent, 0%), #10b981 100%);
+    width: var(--total-fill, 0%);
+}
+
+.ratio-text {
+    color: white;
+    font-size: 0.9rem;
+    font-weight: 500;
+    text-align: center;
+}
+
+/* Mobile responsive styles for dashboard stats panel */
+@media (max-width: 768px) {
+    .dashboard-stats-panel {
+        margin: 20px;
+        padding: 25px 20px;
+        min-width: auto;
+        max-width: calc(100vw - 40px);
+        width: 100%;
+        max-height: calc(100vh - 40px);
+        overflow-y: auto;
+    }
+    
+    .dashboard-stats-avatar {
+        width: 100px;
+        height: 100px;
+        font-size: 2.5rem;
+        margin-bottom: 15px;
+        box-shadow: 0 6px 20px rgba(59, 130, 246, 0.3);
+    }
+    
+    .player-stats-username {
+        font-size: 1.2rem;
+        margin-bottom: 3px;
+    }
+    
+    .player-stats-title {
+        font-size: 0.8rem;
+        margin-bottom: 15px;
+    }
+    
+    .player-stats-content {
+        margin-bottom: 20px;
+    }
+    
+    .stat-number {
+        font-size: 1.8rem;
+    }
+    
+    .stat-label {
+        font-size: 0.75rem;
+    }
+    
+    .win-loss-ratio {
+        margin-top: 12px;
+        padding-top: 12px;
+    }
+    
+    .ratio-label {
+        font-size: 0.75rem;
+        margin-bottom: 6px;
+    }
+    
+    .ratio-text {
+        font-size: 0.8rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .dashboard-stats-panel {
+        margin: 15px;
+        padding: 20px 15px;
+        max-width: calc(100vw - 30px);
+    }
+    
+    .dashboard-stats-avatar {
+        width: 80px;
+        height: 80px;
+        font-size: 2rem;
+        margin-bottom: 12px;
+    }
+    
+    .player-stats-username {
+        font-size: 1.1rem;
+    }
+    
+    .player-stats-title {
+        font-size: 0.75rem;
+        margin-bottom: 12px;
+    }
+    
+    .stat-number {
+        font-size: 1.5rem;
+    }
+    
+    .stat-label {
+        font-size: 0.7rem;
+    }
+    
+    .ratio-text {
+        font-size: 0.75rem;
+    }
+}
 
 /* ============================================ */
 /* MOBILE RESPONSIVE STYLES FOR VERTICAL PLAY */
