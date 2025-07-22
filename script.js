@@ -40,6 +40,14 @@ function showUserDashboard() {
     document.getElementById('loading-screen').style.display = 'none';
     document.getElementById('winning-screen').style.display = 'none';
     
+    // Always scroll to top when dashboard loads (especially important on mobile)
+    window.scrollTo(0, 0);
+    document.body.scrollTop = 0; // For Safari
+    document.documentElement.scrollTop = 0; // For Chrome, Firefox, IE and Opera
+    
+    // Re-enable scrolling when returning to dashboard
+    document.body.classList.remove('game-active');
+    
     // Update user info in dashboard
     if (currentUser) {
         document.getElementById('user-name').textContent = currentUser.displayName || 'Player';
@@ -113,11 +121,11 @@ document.addEventListener('click', function(event) {
         document.getElementById('avatar-upload').click();
     }
     
-    // Player avatar click in game area
-    if (event.target.id === 'player-avatar' || event.target.closest('#player-avatar')) {
+    // Game score window player avatar click
+    if (event.target.id === 'game-player-avatar' || event.target.closest('#game-player-avatar')) {
         event.preventDefault();
         event.stopPropagation();
-        togglePlayerStatsPanel();
+        toggleGameStatsPanel();
     }
     
     // Dashboard avatar click
@@ -135,11 +143,11 @@ document.addEventListener('click', function(event) {
         hideDashboardStatsPanel();
     }
     
-    // Close stats panel when clicking elsewhere
-    const statsPanel = document.getElementById('player-stats-panel');
-    if (statsPanel && statsPanel.classList.contains('expanded')) {
-        if (!event.target.closest('.player-stats-panel') && !event.target.closest('#player-avatar')) {
-            closePlayerStatsPanel();
+    // Close game stats panel when clicking elsewhere
+    const gameStatsPanel = document.getElementById('game-stats-panel');
+    if (gameStatsPanel && gameStatsPanel.style.display === 'block') {
+        if (!event.target.closest('.game-stats-panel') && !event.target.closest('#game-player-avatar')) {
+            closeGameStatsPanel();
         }
     }
     
@@ -635,94 +643,164 @@ function updateAvatarDisplay() {
 }
 
 function updatePlayerInfoInGame() {
-    const playerNameElement = document.getElementById('player-name');
-    
-    if (playerNameElement && currentUser) {
-        playerNameElement.textContent = currentUser.displayName || 'Player';
-    }
-    
     // Update the player avatar in game area
     updateAvatarDisplay();
-    
-    // Update stats panel
-    updatePlayerStatsPanel();
 }
 
 function updatePlayerStatsPanel() {
-    const statsUsername = document.getElementById('stats-username');
-    const statsWins = document.getElementById('stats-wins');
-    const statsLosses = document.getElementById('stats-losses');
-    const ratioFill = document.getElementById('ratio-fill');
-    const ratioText = document.getElementById('ratio-text');
-    
-    if (currentUser && window.currentUserData) {
-        if (statsUsername) {
-            statsUsername.textContent = currentUser.displayName || 'Player';
-        }
-        
-        const wins = window.currentUserData.gamesWon || 0;
-        const losses = window.currentUserData.gamesLost || 0;
-        const totalGames = wins + losses;
-        
-        if (statsWins) {
-            statsWins.textContent = wins;
-        }
-        if (statsLosses) {
-            statsLosses.textContent = losses;
-        }
-        
-        // Update win/loss ratio visualization
-        if (ratioFill && ratioText) {
-            if (totalGames === 0) {
-                // No games played yet
-                ratioFill.style.setProperty('--total-fill', '0%');
-                ratioFill.style.setProperty('--loss-percent', '0%');
-                ratioText.textContent = 'No games played';
-            } else {
-                const winPercentage = Math.round((wins / totalGames) * 100);
-                const lossPercentage = Math.round((losses / totalGames) * 100);
-                
-                // Set the total fill to 100% (full bar)
-                ratioFill.style.setProperty('--total-fill', '100%');
-                
-                // Set the loss percentage for the gradient split
-                ratioFill.style.setProperty('--loss-percent', `${lossPercentage}%`);
-                
-                                 // Update text
-                 ratioText.textContent = `${winPercentage}%`;
-            }
-        }
-    }
+    // This function is kept for compatibility but no longer used for game area
+    // Stats are now shown through the score window avatar
 }
 
-function togglePlayerStatsPanel() {
-    const statsPanel = document.getElementById('player-stats-panel');
-    if (!statsPanel) return;
+function toggleGameStatsPanel() {
+    const statsPanel = document.getElementById('game-stats-panel');
+    if (!statsPanel) {
+        createGameStatsPanel();
+        return;
+    }
     
-    if (statsPanel.classList.contains('expanded')) {
-        closePlayerStatsPanel();
+    if (statsPanel.style.display === 'block') {
+        closeGameStatsPanel();
     } else {
-        openPlayerStatsPanel();
+        openGameStatsPanel();
     }
 }
 
-function openPlayerStatsPanel() {
-    const statsPanel = document.getElementById('player-stats-panel');
-    if (!statsPanel) return;
+function createGameStatsPanel() {
+    // Create the stats panel overlay
+    const statsOverlay = document.createElement('div');
+    statsOverlay.id = 'game-stats-overlay';
+    statsOverlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(8px);
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+    `;
+    
+    // Create the stats panel
+    const statsPanel = document.createElement('div');
+    statsPanel.id = 'game-stats-panel';
+    statsPanel.className = 'game-stats-panel';
+    statsPanel.style.cssText = `
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%);
+        backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 15px;
+        padding: 30px;
+        min-width: 280px;
+        max-width: 400px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+        transform: scale(0.8);
+        transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        color: white;
+        text-align: center;
+    `;
+    
+    // Add content to stats panel
+    updateGameStatsPanel(statsPanel);
+    
+    statsOverlay.appendChild(statsPanel);
+    document.body.appendChild(statsOverlay);
+    
+    // Show with animation
+    setTimeout(() => {
+        statsOverlay.style.opacity = '1';
+        statsPanel.style.transform = 'scale(1)';
+    }, 10);
+    
+    // Close on overlay click
+    statsOverlay.addEventListener('click', (e) => {
+        if (e.target === statsOverlay) {
+            closeGameStatsPanel();
+        }
+    });
+}
+
+function updateGameStatsPanel(panel) {
+    if (!panel) panel = document.getElementById('game-stats-panel');
+    if (!panel) return;
+    
+    const profilePictureUrl = window.currentUserData?.profilePicture;
+    const wins = window.currentUserData?.gamesWon || 0;
+    const losses = window.currentUserData?.gamesLost || 0;
+    const totalGames = wins + losses;
+    
+    let winPercentage = 0;
+    let ratioText = 'No games played';
+    
+    if (totalGames > 0) {
+        winPercentage = Math.round((wins / totalGames) * 100);
+        ratioText = `${winPercentage}% wins`;
+    }
+    
+    panel.innerHTML = `
+        <div style="margin-bottom: 20px;">
+            <div style="width: 120px; height: 120px; margin: 0 auto 15px auto; border-radius: 50%; overflow: hidden; border: 4px solid rgba(255, 255, 255, 0.2); background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); display: flex; align-items: center; justify-content: center; font-size: 3rem; color: white; ${profilePictureUrl ? `background-image: url(${profilePictureUrl}); background-size: cover; background-position: center; font-size: 0;` : ''}">${profilePictureUrl ? '' : '👤'}</div>
+            <h3 style="color: white; font-size: 1.4rem; font-weight: 600; margin-bottom: 5px;">${currentUser?.displayName || 'Player'}</h3>
+            <p style="color: #64748b; font-size: 0.9rem; margin: 0;">Game Statistics</p>
+        </div>
+        
+        <div style="display: flex; justify-content: space-around; margin-bottom: 25px;">
+            <div style="text-align: center;">
+                <div style="color: #10b981; font-size: 2rem; font-weight: 700; margin-bottom: 5px;">${wins}</div>
+                <div style="color: #64748b; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px;">Wins</div>
+            </div>
+            <div style="text-align: center;">
+                <div style="color: #ef4444; font-size: 2rem; font-weight: 700; margin-bottom: 5px;">${losses}</div>
+                <div style="color: #64748b; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px;">Losses</div>
+            </div>
+        </div>
+        
+        <div style="margin-bottom: 15px;">
+            <div style="color: #64748b; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Win/Loss Ratio</div>
+            <div style="width: 100%; height: 8px; background: rgba(255, 255, 255, 0.1); border-radius: 4px; overflow: hidden; position: relative; margin-bottom: 8px;">
+                <div style="height: 100%; border-radius: 4px; transition: all 0.8s cubic-bezier(0.4, 0, 0.2, 1); background: linear-gradient(90deg, #ef4444 0%, #ef4444 ${100-winPercentage}%, #10b981 ${100-winPercentage}%, #10b981 100%); width: ${totalGames > 0 ? 100 : 0}%;"></div>
+            </div>
+            <div style="color: white; font-size: 0.9rem; font-weight: 500;">${ratioText}</div>
+        </div>
+    `;
+}
+
+function openGameStatsPanel() {
+    let statsOverlay = document.getElementById('game-stats-overlay');
+    if (!statsOverlay) {
+        createGameStatsPanel();
+        return;
+    }
     
     // Update stats before showing
-    updatePlayerStatsPanel();
+    updateGameStatsPanel();
     
-    // Add expanded class
-    statsPanel.classList.add('expanded');
+    statsOverlay.style.display = 'flex';
+    setTimeout(() => {
+        statsOverlay.style.opacity = '1';
+        const panel = document.getElementById('game-stats-panel');
+        if (panel) panel.style.transform = 'scale(1)';
+    }, 10);
 }
 
-function closePlayerStatsPanel() {
-    const statsPanel = document.getElementById('player-stats-panel');
-    if (!statsPanel) return;
+function closeGameStatsPanel() {
+    const statsOverlay = document.getElementById('game-stats-overlay');
+    if (!statsOverlay) return;
     
-    // Remove expanded class
-    statsPanel.classList.remove('expanded');
+    statsOverlay.style.opacity = '0';
+    const panel = document.getElementById('game-stats-panel');
+    if (panel) panel.style.transform = 'scale(0.8)';
+    
+    setTimeout(() => {
+        if (statsOverlay.parentNode) {
+            statsOverlay.remove();
+        }
+    }, 300);
 }
 
 // Dashboard stats panel functions
@@ -1374,6 +1452,11 @@ document.addEventListener('DOMContentLoaded', function() {
         gameArea.style.setProperty('opacity', '1', 'important');
     }
     
+    // Prevent scrolling on mobile during game
+    if (window.innerWidth <= 768) {
+        document.body.classList.add('game-active');
+    }
+    
     // Update player info in game area
     updatePlayerInfoInGame();
     
@@ -1647,12 +1730,12 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             console.log('Starting simplified card dealing animation...');
             
-            // Animate player cards
+            // Animate player cards - faster
             playerCardElements.forEach((card, index) => {
                 setTimeout(() => {
                     if (card && card.parentNode) {
                         gsap.to(card, {
-                            duration: 0.3,
+                            duration: 0.15, // Much faster
                             opacity: 1,
                             x: 0,
                             y: 0,
@@ -1661,15 +1744,15 @@ document.addEventListener('DOMContentLoaded', function() {
                             ease: "power2.out"
                         });
                     }
-                }, index * 50);
+                }, index * 25); // Shorter delay
             });
             
-            // Animate opponent cards
+            // Animate opponent cards - faster
             opponentCardElements.forEach((card, index) => {
                 setTimeout(() => {
                     if (card && card.parentNode) {
                         gsap.to(card, {
-                            duration: 0.3,
+                            duration: 0.15, // Much faster
                             opacity: 1,
                             x: 0,
                             y: 0,
@@ -1678,15 +1761,15 @@ document.addEventListener('DOMContentLoaded', function() {
                             ease: "power2.out"
                         });
                     }
-                }, (index + playerCardElements.length) * 50);
+                }, (index + playerCardElements.length) * 25); // Shorter delay
             });
             
-            // Animate table cards
+            // Animate table cards - faster
             tableCardElements.forEach((card, index) => {
                 setTimeout(() => {
                     if (card && card.parentNode) {
                         gsap.to(card, {
-                            duration: 0.3,
+                            duration: 0.15, // Much faster
                             opacity: 1,
                             x: 0,
                             y: 0,
@@ -1695,7 +1778,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             ease: "power2.out"
                         });
                     }
-                }, (index + playerCardElements.length + opponentCardElements.length) * 50);
+                }, (index + playerCardElements.length + opponentCardElements.length) * 25); // Shorter delay
             });
             
         } catch (error) {
@@ -2005,7 +2088,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Kill any existing animations before starting new one
                     gsap.killTweensOf(card);
                     gsap.to(card, {
-                        duration: 0.05, // Ultra fast return
+                        duration: 0.02, // Ultra ultra fast return
                         x: currentOriginalTransform.x, // Return to exact original X position
                         y: currentOriginalTransform.y, // Return to exact original Y position  
                         rotation: currentOriginalTransform.rotation, // Return to exact original rotation
@@ -2034,9 +2117,16 @@ document.addEventListener('DOMContentLoaded', function() {
         const isMobile = screenWidth < 768;
         const isSmallMobile = screenWidth < 480;
         
-        // Adjust table spread based on screen size for larger cards
-        const maxSpread = isSmallMobile ? 160 : isMobile ? 200 : 280;
-        const overlapAmount = totalCards > 1 ? Math.min(40, maxSpread / totalCards) : 0;
+        // Adjust table spread based on screen size - much tighter on mobile
+        let overlapAmount;
+        if (isMobile) {
+            // Very minimal spacing on mobile to keep cards close together
+            overlapAmount = totalCards > 1 ? Math.min(8, 30 / totalCards) : 0;
+        } else {
+            // Desktop maintains original spacing
+            const maxSpread = 280;
+            overlapAmount = totalCards > 1 ? Math.min(40, maxSpread / totalCards) : 0;
+        }
         const centerOffset = (totalCards - 1) * overlapAmount / 2;
         
         cards.forEach((card, index) => {
@@ -3041,8 +3131,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 <h2 style="color: white; font-size: 1.8rem; font-weight: 700; margin-bottom: 10px;">
                     Round ${currentRound} ${isGameOver ? 'Final' : 'Complete'}!
                 </h2>
-                <p style="color: #64748b; font-size: 1rem;">
-                    ${isGameOver ? 'Game Over!' : 'Starting Round ' + (currentRound + 1) + '...'}
+                <p style="color: #64748b; font-size: 1rem;" id="round-countdown-text">
+                    ${isGameOver ? 'Game Over!' : 'Starting next round in 5...'}
                 </p>
             </div>
             
@@ -3131,17 +3221,28 @@ document.addEventListener('DOMContentLoaded', function() {
         popupOverlay.appendChild(popupContent);
         document.body.appendChild(popupOverlay);
         
-                 // Auto-close after 10 seconds
-         setTimeout(() => {
-             if (popupOverlay && popupOverlay.parentNode) {
-                 popupOverlay.style.animation = 'fadeOut 0.3s ease-out';
-                 setTimeout(() => {
-                     if (popupOverlay.parentNode) {
-                         popupOverlay.remove();
-                     }
-                 }, 300);
+                 // Auto-close after 5 seconds with dynamic countdown
+         let countdown = 5;
+         const countdownText = document.getElementById('round-countdown-text');
+        
+                 const countdownInterval = setInterval(() => {
+             countdown--;
+             if (countdownText && countdown > 0 && !isGameOver) {
+                 countdownText.textContent = `Starting next round in ${countdown}...`;
              }
-         }, 10000);
+            
+            if (countdown <= 0) {
+                clearInterval(countdownInterval);
+                if (popupOverlay && popupOverlay.parentNode) {
+                    popupOverlay.style.animation = 'fadeOut 0.3s ease-out';
+                    setTimeout(() => {
+                        if (popupOverlay.parentNode) {
+                            popupOverlay.remove();
+                        }
+                    }, 300);
+                }
+            }
+        }, 1000);
         
         // Allow manual close by clicking overlay
         popupOverlay.addEventListener('click', (e) => {
@@ -3519,7 +3620,7 @@ document.addEventListener('DOMContentLoaded', function() {
          // Hide the original AI card
          gsap.set(aiCardElement, { opacity: 0 });
          
-         // Create animation timeline - MUCH FASTER
+         // Create animation timeline - ULTRA FAST
          const aiMoveTimeline = gsap.timeline({
              onComplete: () => {
                  // Clean up and execute the actual move
@@ -3529,14 +3630,14 @@ document.addEventListener('DOMContentLoaded', function() {
              }
          });
          
-         // Step 1: Move card to center quickly
+         // Step 1: Move card to center very quickly
          const centerArea = document.querySelector('.center-area');
          const centerRect = centerArea.getBoundingClientRect();
          const targetX = (centerRect.left - gameAreaRect.left) + centerRect.width / 2 - aiCardRect.width / 2;
          const targetY = (centerRect.top - gameAreaRect.top) + centerRect.height / 2 - aiCardRect.height / 2;
          
          aiMoveTimeline.to(cardCopy, {
-             duration: 0.3, // Much faster
+             duration: 0.15, // Ultra fast
              x: targetX - (aiCardRect.left - gameAreaRect.left),
              y: targetY - (aiCardRect.top - gameAreaRect.top),
              rotation: 0,
@@ -3556,17 +3657,17 @@ document.addEventListener('DOMContentLoaded', function() {
                  const tableCardElements = document.querySelectorAll('#table-cards .card');
                  const targetCards = move.tableCards.map(index => tableCardElements[index]).filter(el => el);
                  
-                 // Animate target cards flying to the AI card
+                 // Animate target cards flying to the AI card - ultra fast
                  targetCards.forEach((targetCard, index) => {
                      if (targetCard) {
                          gsap.to(targetCard, {
-                             duration: 0.3, // Much faster
+                             duration: 0.15, // Ultra fast
                              x: targetX - (aiCardRect.left - gameAreaRect.left) + index * 2,
                              y: targetY - (aiCardRect.top - gameAreaRect.top) + index * 2,
                              rotation: (Math.random() - 0.5) * 20,
                              scale: 0.8,
                              ease: "power2.in",
-                             delay: index * 0.05
+                             delay: index * 0.02 // Shorter stagger
                          });
                      }
                  });
@@ -3575,17 +3676,17 @@ document.addEventListener('DOMContentLoaded', function() {
                  const allCardsToHide = [cardCopy, ...targetCards].filter(el => el);
                  if (allCardsToHide.length > 0) {
                      gsap.to(allCardsToHide, {
-                         duration: 0.2, // Much faster
+                         duration: 0.1, // Ultra fast
                          opacity: 0,
                          scale: 0.5,
                          ease: "power2.in",
-                         delay: 0.4
+                         delay: 0.2 // Much shorter delay
                      });
                  }
-             }, 0.4);
+             }, 0.2); // Start capture animation sooner
              
-             // Total timeline duration for capture - MUCH SHORTER
-             aiMoveTimeline.to({}, { duration: 1.0 });
+             // Total timeline duration for capture - ULTRA SHORT
+             aiMoveTimeline.to({}, { duration: 0.5 }); // Much shorter total time
          } else {
              // For lay action, just move card to table area quickly
              aiMoveTimeline.to(cardCopy, {
@@ -3678,17 +3779,17 @@ document.addEventListener('DOMContentLoaded', function() {
           const playerCardWidth = playerCardRect.width;
           const targetScale = tableCardWidth / playerCardWidth;
           
-          playerMoveTimeline.to(cardCopy, {
-              duration: 0.4,
-              x: targetX - (playerCardRect.left - gameAreaRect.left),
-              y: targetY - (playerCardRect.top - gameAreaRect.top),
-              rotation: 0,
-              scale: targetScale, // Scale down to match table card size
-              ease: "power2.out"
-          });
-         
-         // Step 2: Brief pause at center
-         playerMoveTimeline.to({}, { duration: 0.2 });
+                   playerMoveTimeline.to(cardCopy, {
+             duration: 0.2, // Much faster
+             x: targetX - (playerCardRect.left - gameAreaRect.left),
+             y: targetY - (playerCardRect.top - gameAreaRect.top),
+             rotation: 0,
+             scale: targetScale, // Scale down to match table card size
+             ease: "power2.out"
+         });
+        
+        // Step 2: Very brief pause at center
+        playerMoveTimeline.to({}, { duration: 0.1 }); // Much shorter pause
          
          // Step 3: Animate capture - table cards fly to the player card
          const tableCardElements = document.querySelectorAll('#table-cards .card');
@@ -3704,17 +3805,17 @@ document.addEventListener('DOMContentLoaded', function() {
              });
              
              playerMoveTimeline.call(() => {
-                 // Animate target cards flying to the player card
+                 // Animate target cards flying to the player card - ultra fast
                  targetCards.forEach((targetCard, index) => {
                      if (targetCard) {
                          gsap.to(targetCard, {
-                             duration: 0.3,
+                             duration: 0.15, // Much faster
                              x: targetX - (playerCardRect.left - gameAreaRect.left) + index * 2,
                              y: targetY - (playerCardRect.top - gameAreaRect.top) + index * 2,
                              rotation: (Math.random() - 0.5) * 20,
                              scale: 0.8,
                              ease: "power2.in",
-                             delay: index * 0.05
+                             delay: index * 0.02 // Shorter stagger
                          });
                      }
                  });
@@ -3723,17 +3824,17 @@ document.addEventListener('DOMContentLoaded', function() {
                  const allCardsToHide = [cardCopy, ...targetCards].filter(el => el);
                  if (allCardsToHide.length > 0) {
                      gsap.to(allCardsToHide, {
-                         duration: 0.2,
+                         duration: 0.1, // Ultra fast
                          opacity: 0,
                          scale: 0.5,
                          ease: "power2.in",
-                         delay: 0.4
+                         delay: 0.2 // Much shorter delay
                      });
                  }
-             }, 0.4);
+             }, 0.2); // Start capture animation sooner
              
-             // Total timeline duration
-             playerMoveTimeline.to({}, { duration: 1.0 });
+             // Total timeline duration - ultra short
+             playerMoveTimeline.to({}, { duration: 0.5 }); // Much shorter total time
          } else {
              // No cards to capture, just hide the played card
              playerMoveTimeline.to(cardCopy, {
@@ -3797,30 +3898,30 @@ document.addEventListener('DOMContentLoaded', function() {
           const playerCardWidth = playerCardRect.width;
           const targetScale = tableCardWidth / playerCardWidth;
           
-          playerLayTimeline.to(cardCopy, {
-              duration: 0.4,
-              x: targetX - (playerCardRect.left - gameAreaRect.left),
-              y: targetY - (playerCardRect.top - gameAreaRect.top),
-              rotation: (Math.random() - 0.5) * 15,
-              scale: targetScale, // Scale down to match table card size
-              ease: "power2.out"
-          });
-         
-         // Step 2: Brief pause and then settle on table
-         playerLayTimeline.to(cardCopy, {
-             duration: 0.3,
-             y: targetY - (playerCardRect.top - gameAreaRect.top) + 20,
-             scale: targetScale, // Keep the same small scale, don't expand
-             ease: "power2.out",
-             delay: 0.2
+                   playerLayTimeline.to(cardCopy, {
+             duration: 0.2, // Much faster
+             x: targetX - (playerCardRect.left - gameAreaRect.left),
+             y: targetY - (playerCardRect.top - gameAreaRect.top),
+             rotation: (Math.random() - 0.5) * 15,
+             scale: targetScale, // Scale down to match table card size
+             ease: "power2.out"
          });
-         
-         // Step 3: Fade out
-         playerLayTimeline.to(cardCopy, {
-             duration: 0.2,
-             opacity: 0,
-             delay: 0.2
-         });
+        
+        // Step 2: Very brief pause and then settle on table
+        playerLayTimeline.to(cardCopy, {
+            duration: 0.15, // Much faster
+            y: targetY - (playerCardRect.top - gameAreaRect.top) + 20,
+            scale: targetScale, // Keep the same small scale, don't expand
+            ease: "power2.out",
+            delay: 0.1 // Shorter delay
+        });
+        
+        // Step 3: Fade out quickly
+        playerLayTimeline.to(cardCopy, {
+            duration: 0.1, // Much faster
+            opacity: 0,
+            delay: 0.1 // Shorter delay
+        });
      }
     
     function findBestAIMove(aiHand) {
@@ -4098,10 +4199,14 @@ document.addEventListener('DOMContentLoaded', function() {
             // Update only the dynamic values without recreating the structure
             const cardsInDeck = deck.length;
             
-            // Update round and deal
+            // Update round and deal - show Deal X/6 on mobile, Round X on desktop
             const roundDisplay = document.getElementById('game-round-display');
             const dealDisplay = document.getElementById('game-deal-display');
-            if (roundDisplay) roundDisplay.textContent = `Round ${currentRound}`;
+            const isMobile = window.innerWidth < 768;
+            
+            if (roundDisplay) {
+                roundDisplay.textContent = isMobile ? `Deal ${currentDeal}/6` : `Round ${currentRound}`;
+            }
             if (dealDisplay) dealDisplay.textContent = `Deal ${currentDeal}/6`;
             
             // Update scores
@@ -4506,6 +4611,9 @@ function confirmExitGame() {
         tableCardsContainer.innerHTML = '';
     }
     
+    // Re-enable scrolling when exiting game
+    document.body.classList.remove('game-active');
+    
     // Hide game area and show dashboard
     showUserDashboard();
     
@@ -4803,3 +4911,57 @@ function cancelRankedGame() {
         confirmation.remove();
     }
 }
+
+// Mobile dropdown menu functionality
+document.addEventListener('DOMContentLoaded', function() {
+    const mobileMenuBtn = document.getElementById('mobile-menu-btn');
+    const mobileDropdown = document.getElementById('mobile-dropdown');
+    const mobileSettingsBtn = document.getElementById('mobile-settings-btn');
+    const mobileLogoutBtn = document.getElementById('mobile-logout-btn');
+    
+    // Toggle dropdown on hamburger click
+    if (mobileMenuBtn) {
+        mobileMenuBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            mobileDropdown.classList.toggle('show');
+        });
+    }
+    
+    // Close dropdown when clicking outside
+    document.addEventListener('click', function(e) {
+        if (mobileDropdown && !mobileDropdown.contains(e.target) && !mobileMenuBtn.contains(e.target)) {
+            mobileDropdown.classList.remove('show');
+        }
+    });
+    
+    // Handle mobile settings button click
+    if (mobileSettingsBtn) {
+        mobileSettingsBtn.addEventListener('click', function() {
+            mobileDropdown.classList.remove('show');
+            // Trigger the same functionality as desktop settings button
+            const desktopSettingsBtn = document.getElementById('settings-btn');
+            if (desktopSettingsBtn) {
+                desktopSettingsBtn.click();
+            }
+        });
+    }
+    
+    // Handle mobile logout button click
+    if (mobileLogoutBtn) {
+        mobileLogoutBtn.addEventListener('click', function() {
+            mobileDropdown.classList.remove('show');
+            // Trigger the same functionality as desktop logout button
+            const desktopLogoutBtn = document.getElementById('logout-btn');
+            if (desktopLogoutBtn) {
+                desktopLogoutBtn.click();
+            }
+        });
+    }
+    
+    // Close dropdown on escape key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && mobileDropdown && mobileDropdown.classList.contains('show')) {
+            mobileDropdown.classList.remove('show');
+        }
+    });
+});
