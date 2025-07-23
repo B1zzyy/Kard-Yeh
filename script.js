@@ -3550,7 +3550,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         console.log('Finding best AI move...');
+        console.log('AI hand:', opponentHand.map(c => c.value + c.suit));
+        console.log('Table cards:', tableCards.map(c => c.value + c.suit));
         const bestMove = findBestAIMove(opponentHand);
+        console.log('AI chose:', bestMove.action, bestMove.description, 'Score:', bestMove.score);
         
         // Show AI move with visual feedback
         showAIMove(bestMove, () => {
@@ -3926,6 +3929,15 @@ document.addEventListener('DOMContentLoaded', function() {
     
     function findBestAIMove(aiHand) {
         const moves = [];
+        let hasAnyCaptures = false;
+        
+        // FIRST PASS: Check if ANY captures are possible with ANY card
+        aiHand.forEach((card, cardIndex) => {
+            const captures = getValidCapturesForCard(card);
+            if (captures.length > 0) {
+                hasAnyCaptures = true;
+            }
+        });
         
         // Evaluate each card in AI hand
         aiHand.forEach((card, cardIndex) => {
@@ -3933,7 +3945,36 @@ document.addEventListener('DOMContentLoaded', function() {
             const captures = getValidCapturesForCard(card);
             
             captures.forEach(capture => {
-                const score = evaluateCaptureMove(capture);
+                let score = evaluateCaptureMove(capture);
+                
+                // SPECIAL CARD PRIORITY: AI has special card and can use it
+                if (card.value === '2' && card.suit === '♣') {
+                    score += 500; // MASSIVE bonus for using 2♣ to capture
+                }
+                if (card.value === '10' && card.suit === '♦') {
+                    score += 500; // MASSIVE bonus for using 10♦ to capture
+                }
+                if (card.value === 'J') {
+                    score += 300; // High bonus for using Jack strategically
+                }
+                
+                // If using special card to capture matching special card
+                const capturedCards = capture.cards.map(index => tableCards[index]);
+                capturedCards.forEach(capturedCard => {
+                    if (card.value === '2' && card.suit === '♣' && 
+                        capturedCard.value === '2' && capturedCard.suit === '♣') {
+                        score += 1000; // ULTIMATE PRIORITY: 2♣ captures 2♣
+                    }
+                    if (card.value === '10' && card.suit === '♦' && 
+                        capturedCard.value === '10' && capturedCard.suit === '♦') {
+                        score += 1000; // ULTIMATE PRIORITY: 10♦ captures 10♦
+                    }
+                    if (card.value === capturedCard.value && 
+                        (card.value === '2' || card.value === '10')) {
+                        score += 600; // High bonus for special card rank matches
+                    }
+                });
+                
                 moves.push({
                     action: 'capture',
                     cardIndex: cardIndex,
@@ -3943,19 +3984,43 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
             });
             
-            // Always consider laying the card as an option
-            const layScore = evaluateLayMove(card);
-            moves.push({
-                action: 'lay',
-                cardIndex: cardIndex,
-                tableCards: [],
-                score: layScore,
-                description: `Lay ${card.value}${card.suit}`
-            });
+            // CRITICAL RULE: Only allow laying if NO captures are possible with ANY card
+            if (!hasAnyCaptures) {
+                let layScore = evaluateLayMove(card);
+                
+                moves.push({
+                    action: 'lay',
+                    cardIndex: cardIndex,
+                    tableCards: [],
+                    score: layScore,
+                    description: `Lay ${card.value}${card.suit}`
+                });
+            }
         });
         
+        // Debug: Log all move options
+        console.log('AI move options:');
+        console.log(`Any captures possible: ${hasAnyCaptures}`);
+        moves.forEach((move, index) => {
+            console.log(`  ${index + 1}. ${move.description} (Score: ${move.score})`);
+        });
+        
+        // Safety check: If no moves generated, force a lay (shouldn't happen)
+        if (moves.length === 0) {
+            console.log('ERROR: No moves generated, forcing lay of first card');
+            moves.push({
+                action: 'lay',
+                cardIndex: 0,
+                tableCards: [],
+                score: 0,
+                description: `Emergency lay ${aiHand[0].value}${aiHand[0].suit}`
+            });
+        }
+        
         // Choose best move based on difficulty
-        return chooseMoveByDifficulty(moves);
+        const chosenMove = chooseMoveByDifficulty(moves);
+        console.log(`AI selected: ${chosenMove.description} (Score: ${chosenMove.score})`);
+        return chosenMove;
     }
     
     function getValidCapturesForCard(card) {
@@ -4027,31 +4092,53 @@ document.addEventListener('DOMContentLoaded', function() {
         let score = 0;
         const capturedCards = capture.cards.map(index => tableCards[index]);
         
-        // Jack capture bonus - very valuable
+        // HUGE base bonus for ANY capture - captures should always beat laying
+        score += 200; // Base capture bonus
+        
+        // Jack capture bonus - extremely valuable
         if (capture.type === 'jack') {
-            score += capturedCards.length * 15; // Higher multiplier for Jack captures
-            score += 30; // Bonus for clearing the table
+            score += capturedCards.length * 25; // Even higher multiplier for Jack captures
+            score += 100; // Huge bonus for clearing the table
         } else {
             // Base score for number of cards captured
-            score += capturedCards.length * 10;
+            score += capturedCards.length * 15; // Increased from 10
         }
         
         // Bonus for special cards
         capturedCards.forEach(card => {
             if (card.value === '2' && card.suit === '♣') {
-                score += 50; // 2 of Clubs is very valuable
+                score += 200; // 2 of Clubs is extremely valuable - HIGHEST PRIORITY
             }
             if (card.value === '10' && card.suit === '♦') {
-                score += 50; // 10 of Diamonds is very valuable
+                score += 200; // 10 of Diamonds is extremely valuable - HIGHEST PRIORITY
             }
             if (card.suit === '♣') {
-                score += 5; // Clubs are valuable for majority
+                score += 15; // Clubs are valuable for majority
             }
         });
         
+                 // STRATEGIC PRIORITY: Prioritize special cards on table (fair game knowledge)
+         capturedCards.forEach(card => {
+             // Extra bonus for capturing special cards from table (AI can see table)
+             if (card.value === '2' && card.suit === '♣') {
+                 score += 300; // MASSIVE bonus for securing 2♣ from table
+             }
+             if (card.value === '10' && card.suit === '♦') {
+                 score += 300; // MASSIVE bonus for securing 10♦ from table
+             }
+             
+             // General priority for valuable cards on table
+             if (card.suit === '♣') {
+                 score += 25; // Clubs are valuable for majority
+             }
+         });
+        
         // Bonus for capturing many cards at once
         if (capturedCards.length >= 3) {
-            score += 20;
+            score += 50; // Increased bonus
+        }
+        if (capturedCards.length >= 5) {
+            score += 100; // Massive bonus for big captures
         }
         
         return score;
@@ -4060,25 +4147,44 @@ document.addEventListener('DOMContentLoaded', function() {
     function evaluateLayMove(card) {
         let score = 0;
         
-        // Jacks should almost never be laid (they're too powerful)
+        // Jacks should NEVER be laid if there are table cards to capture
         if (card.value === 'J') {
-            score = -50; // Very negative score for laying Jack
+            if (tableCards.length > 0) {
+                score = -1000; // Extremely negative score - Jack should ALWAYS capture when possible
+            } else {
+                score = -50; // Still negative when no table cards
+            }
             return score;
+        }
+        
+        // Before laying any card, check if ANY captures are possible with ANY card in hand
+        const hasAnyCaptures = opponentHand.some(handCard => {
+            return getValidCapturesForCard(handCard).length > 0;
+        });
+        
+        // If ANY captures are possible with other cards, heavily penalize laying
+        if (hasAnyCaptures) {
+            score -= 100; // Heavy penalty for laying when captures are available
         }
         
         // Prefer to lay low-value cards
         if (card.numericValue > 0) {
-            score = 5 - card.numericValue; // Lower cards get higher score
+            score += (5 - card.numericValue); // Lower cards get higher score
         } else {
-            score = 2; // Face cards get medium score
+            score += 2; // Face cards get medium score
         }
         
-        // Avoid laying special cards if possible
+        // Heavily avoid laying special cards
         if (card.value === '2' && card.suit === '♣') {
-            score -= 30;
+            score -= 100; // Much higher penalty
         }
         if (card.value === '10' && card.suit === '♦') {
-            score -= 30;
+            score -= 100; // Much higher penalty
+        }
+        
+        // Avoid laying clubs in general (needed for majority)
+        if (card.suit === '♣') {
+            score -= 20;
         }
         
         return score;
