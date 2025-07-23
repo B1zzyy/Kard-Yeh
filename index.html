@@ -13,7 +13,7 @@
     <script type="module">
         import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js';
         import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updateProfile, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js';
-        import { getFirestore, collection, doc, setDoc, getDoc, updateDoc, increment } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js';
+        import { getFirestore, collection, doc, setDoc, getDoc, updateDoc, increment, query, where, limit, getDocs, onSnapshot, deleteDoc } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js';
         import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-storage.js';
         
         // Your web app's Firebase configuration (from Firebase Console)
@@ -52,6 +52,12 @@
             window.uploadBytes = uploadBytes;
             window.getDownloadURL = getDownloadURL;
             window.deleteObject = deleteObject;
+            window.query = query;
+            window.where = where;
+            window.limit = limit;
+            window.getDocs = getDocs;
+            window.onSnapshot = onSnapshot;
+            window.deleteDoc = deleteDoc;
             
             // For development - uncomment these lines if using Firebase emulators
             // connectAuthEmulator(window.auth, "http://localhost:9099");
@@ -220,10 +226,10 @@
                     <p>Cost: 2500 coins</p>
                     <div class="mode-reward">Win: +5000 coins</div>
                 </div>
-                <div class="mode-card">
-                    <h4>Tournament</h4>
-                    <p>Coming Soon!</p>
-                    <div class="mode-reward">Big prizes await</div>
+                <div class="mode-card online-mode">
+                    <h4>Play Online</h4>
+                    <p>Cost: 1000 coins</p>
+                    <div class="mode-reward">Win: +3000 coins</div>
                 </div>
             </div>
         </div>

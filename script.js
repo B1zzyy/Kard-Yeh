@@ -2,6 +2,1236 @@
 let currentUser = null;
 let userCoins = 10000;
 
+// Get numeric value for sum calculations - moved to top for online multiplayer access
+function getCardNumericValue(value) {
+    if (value === 'A') return 1;
+    if (['J', 'Q', 'K'].includes(value)) return 0; // Face cards can't be used in sums
+    return parseInt(value);
+}
+
+// Create shuffled deck - moved to top for online multiplayer access
+function createShuffledDeck() {
+    const suits = ['♠', '♥', '♦', '♣'];
+    const values = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+    const deck = [];
+    
+    for (let suit of suits) {
+        for (let value of values) {
+            deck.push({
+                suit: suit,
+                value: value,
+                color: (suit === '♥' || suit === '♦') ? 'red' : 'black',
+                numericValue: getCardNumericValue(value)
+            });
+        }
+    }
+    
+    // Shuffle deck
+    for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    
+    return deck;
+}
+
+// Image cache to prevent duplicate network requests
+const imageCache = new Map();
+
+// Game logic variables - moved to top for accessibility
+let selectedPlayerCard = null;
+let selectedTableCards = [];
+
+// Game state variables - moved to top for accessibility  
+let deck = [];
+let originalDeck = [];
+let _playerHand = [];
+let opponentHand = [];
+let _tableCards = [];
+let playerCapturedCards = [];
+let opponentCapturedCards = [];
+let currentPlayer = 0;
+
+// Debug wrapper for playerHand
+Object.defineProperty(window, 'playerHand', {
+    get: function() {
+        return _playerHand;
+    },
+    set: function(value) {
+        console.log('=== PLAYER HAND CHANGED ===');
+        console.log('From:', _playerHand.length, 'cards');
+        console.log('To:', value ? value.length : 'null/undefined', 'cards');
+        console.trace('Changed by:');
+        _playerHand = value || [];
+    }
+});
+
+// Debug wrapper for tableCards
+Object.defineProperty(window, 'tableCards', {
+    get: function() {
+        return _tableCards;
+    },
+    set: function(value) {
+        console.log('=== TABLE CARDS CHANGED ===');
+        console.log('From:', _tableCards.length, 'cards');
+        console.log('To:', value ? value.length : 'null/undefined', 'cards');
+        console.trace('Changed by:');
+        _tableCards = value || [];
+    }
+});
+
+let gameScore = { player: 0, opponent: 0 };
+let currentRound = 1;
+let currentDeal = 1;
+let lastCapturer = null;
+let lastAction = null;
+
+// Helper functions for game logic - moved up for accessibility
+function canCapture(playerCard, tableCards) {
+    if (!playerCard || !tableCards || tableCards.length === 0) {
+        return false;
+    }
+    const tableSum = tableCards.reduce((sum, card) => sum + card.numericValue, 0);
+    return tableSum === playerCard.numericValue;
+}
+
+// selectTableCard function - moved to top for global accessibility
+function selectTableCard(cardIndex) {
+    if (selectedPlayerCard === null) return; // Must select hand card first
+    
+    const tableCardIndex = selectedTableCards.indexOf(cardIndex);
+    if (tableCardIndex > -1) {
+        // Deselect table card
+        selectedTableCards.splice(tableCardIndex, 1);
+    } else {
+        // Select table card
+        selectedTableCards.push(cardIndex);
+        
+        // Check if current selection is a valid capture and auto-execute
+        const playedCard = window.playerHand[selectedPlayerCard];
+        const isValidCapture = isValidCaptureSelection(playedCard, selectedTableCards);
+        
+        if (isValidCapture) {
+            console.log('Auto-executing capture with valid selection');
+            console.log('DEBUG: playerHand before executeAction:', playerHand.length, 'cards');
+            console.log('DEBUG: About to call executeAction...');
+            executeAction('capture');
+            return; // Exit early since capture is executed
+        }
+    }
+    
+    updateCardVisuals();
+}
+
+function isValidCaptureSelection(playedCard, selectedIndices) {
+    if (selectedIndices.length === 0) return false;
+    
+    // Jack captures ALL table cards
+    if (playedCard.value === 'J') {
+        return selectedIndices.length === tableCards.length;
+    }
+    
+    // Check rank capture (single card, exact match)
+    if (selectedIndices.length === 1) {
+        const tableCard = tableCards[selectedIndices[0]];
+        return tableCard.value === playedCard.value;
+    }
+    
+    // Check sum capture (multiple cards, must be number cards)
+    if (playedCard.numericValue === 0) return false; // Face cards (except Jack) can't do sum captures
+    
+    const selectedCards = selectedIndices.map(index => tableCards[index]);
+    const allAreNumbers = selectedCards.every(card => card.numericValue > 0);
+    if (!allAreNumbers) return false;
+    
+    const sum = selectedCards.reduce((total, card) => total + card.numericValue, 0);
+    return sum === playedCard.numericValue;
+}
+
+// Player card throwing animations - moved up for accessibility
+function showPlayerCaptureMove(playerCardIndex, tableCardIndices, callback) {
+    const playedCard = playerHand[playerCardIndex];
+    const playerCardElements = document.querySelectorAll('#player-cards .card');
+    const playerCardElement = playerCardElements[playerCardIndex];
+    
+    if (!playerCardElement) {
+        callback();
+        return;
+    }
+    
+    // Create a visual copy of the player card to animate (like the bot does)
+    const cardCopy = createCardElement(playedCard, true, 0, 1);
+    cardCopy.style.position = 'absolute';
+    cardCopy.style.zIndex = '1000';
+    cardCopy.style.pointerEvents = 'none';
+    
+    // Position it at the player card location
+    const playerCardRect = playerCardElement.getBoundingClientRect();
+    const gameAreaRect = document.getElementById('game-area').getBoundingClientRect();
+    
+    cardCopy.style.left = (playerCardRect.left - gameAreaRect.left) + 'px';
+    cardCopy.style.top = (playerCardRect.top - gameAreaRect.top) + 'px';
+    cardCopy.style.width = playerCardRect.width + 'px';
+    cardCopy.style.height = playerCardRect.height + 'px';
+    
+    document.getElementById('game-area').appendChild(cardCopy);
+    
+    // Hide the original player card
+    gsap.set(playerCardElement, { opacity: 0 });
+    
+    // Create animation timeline - same style as AI
+    const playerMoveTimeline = gsap.timeline({
+        onComplete: () => {
+            // Clean up and execute the actual move
+            if (cardCopy.parentNode) {
+                cardCopy.parentNode.removeChild(cardCopy);
+            }
+            callback();
+        }
+    });
+    
+    // Step 1: Move card to center
+    const centerArea = document.querySelector('.center-area');
+    const centerRect = centerArea.getBoundingClientRect();
+    const targetX = (centerRect.left - gameAreaRect.left) + centerRect.width / 2 - playerCardRect.width / 2;
+    const targetY = (centerRect.top - gameAreaRect.top) + centerRect.height / 2 - playerCardRect.height / 2;
+    
+    // Calculate scale to match table card size (make it smaller)
+    const tableCardWidth = 140; // Smaller target size to match table cards better
+    const playerCardWidth = playerCardRect.width;
+    const targetScale = tableCardWidth / playerCardWidth;
+    
+    playerMoveTimeline.to(cardCopy, {
+        duration: 0.2, // Much faster
+        x: targetX - (playerCardRect.left - gameAreaRect.left),
+        y: targetY - (playerCardRect.top - gameAreaRect.top),
+        rotation: 0,
+        scale: targetScale, // Scale down to match table card size
+        ease: "power2.out"
+    });
+   
+   // Step 2: Very brief pause at center
+   playerMoveTimeline.to({}, { duration: 0.1 }); // Much shorter pause
+    
+    // Step 3: Animate capture - table cards fly to the player card
+    const tableCardElements = document.querySelectorAll('#table-cards .card');
+    const targetCards = tableCardIndices.map(index => tableCardElements[index]).filter(el => el);
+    
+    if (targetCards.length > 0) {
+        playerMoveTimeline.call(() => {
+            // Animate target cards flying to the player card - ultra fast
+            targetCards.forEach((targetCard, index) => {
+                if (targetCard) {
+                    gsap.to(targetCard, {
+                        duration: 0.15, // Ultra fast
+                        x: targetX - (targetCard.getBoundingClientRect().left - gameAreaRect.left) + index * 2,
+                        y: targetY - (targetCard.getBoundingClientRect().top - gameAreaRect.top) + index * 2,
+                        rotation: (Math.random() - 0.5) * 20,
+                        scale: 0.8,
+                        ease: "power2.in",
+                        delay: index * 0.02 // Shorter stagger
+                    });
+                }
+            });
+            
+            // Animate the player card and captured cards disappearing
+            const allCardsToHide = [cardCopy, ...targetCards].filter(el => el);
+            if (allCardsToHide.length > 0) {
+                gsap.to(allCardsToHide, {
+                    duration: 0.1, // Ultra fast
+                    opacity: 0,
+                    scale: 0.5,
+                    delay: 0.2
+                });
+            }
+        }, 0.2); // Start capture animation sooner
+        
+        // Total timeline duration - ultra short
+        playerMoveTimeline.to({}, { duration: 0.5 }); // Much shorter total time
+    } else {
+        // No cards to capture, just hide the played card
+        playerMoveTimeline.to(cardCopy, {
+            duration: 0.2,
+            opacity: 0,
+            scale: 0.8,
+            delay: 0.2
+        });
+    }
+ }
+
+// Player lay move animation - moved up for accessibility
+function showPlayerLayMove(playerCardIndex, callback) {
+    const playedCard = playerHand[playerCardIndex];
+    const playerCardElements = document.querySelectorAll('#player-cards .card');
+    const playerCardElement = playerCardElements[playerCardIndex];
+    
+    if (!playerCardElement) {
+        callback();
+        return;
+    }
+    
+    // Create a visual copy of the player card to animate
+    const cardCopy = createCardElement(playedCard, true, 0, 1);
+    cardCopy.style.position = 'absolute';
+    cardCopy.style.zIndex = '1000';
+    cardCopy.style.pointerEvents = 'none';
+    
+    // Position it at the player card location
+    const playerCardRect = playerCardElement.getBoundingClientRect();
+    const gameAreaRect = document.getElementById('game-area').getBoundingClientRect();
+    
+    cardCopy.style.left = (playerCardRect.left - gameAreaRect.left) + 'px';
+    cardCopy.style.top = (playerCardRect.top - gameAreaRect.top) + 'px';
+    cardCopy.style.width = playerCardRect.width + 'px';
+    cardCopy.style.height = playerCardRect.height + 'px';
+    
+    document.getElementById('game-area').appendChild(cardCopy);
+    
+    // Hide the original player card
+    gsap.set(playerCardElement, { opacity: 0 });
+    
+    // Create animation timeline
+    const playerLayTimeline = gsap.timeline({
+        onComplete: () => {
+            // Clean up and execute the actual move
+            if (cardCopy.parentNode) {
+                cardCopy.parentNode.removeChild(cardCopy);
+            }
+            callback();
+        }
+    });
+    
+    // Step 1: Move card to center
+    const centerArea = document.querySelector('.center-area');
+    const centerRect = centerArea.getBoundingClientRect();
+    const targetX = (centerRect.left - gameAreaRect.left) + centerRect.width / 2 - playerCardRect.width / 2;
+    const targetY = (centerRect.top - gameAreaRect.top) + centerRect.height / 2 - playerCardRect.height / 2;
+    
+    // Calculate scale to match table card size (make it smaller)
+    const tableCardWidth = 140; // Smaller target size to match table cards better
+    const playerCardWidth = playerCardRect.width;
+    const targetScale = tableCardWidth / playerCardWidth;
+    
+    playerLayTimeline.to(cardCopy, {
+        duration: 0.2, // Much faster
+        x: targetX - (playerCardRect.left - gameAreaRect.left),
+        y: targetY - (playerCardRect.top - gameAreaRect.top),
+        rotation: (Math.random() - 0.5) * 15,
+        scale: targetScale, // Scale down to match table card size
+        ease: "power2.out"
+    });
+   
+   // Step 2: Very brief pause and then settle on table
+   playerLayTimeline.to(cardCopy, {
+       duration: 0.15, // Much faster
+       y: targetY - (playerCardRect.top - gameAreaRect.top) + 20,
+       scale: targetScale, // Keep the same small scale, don't expand
+       ease: "power2.out",
+       delay: 0.1 // Shorter delay
+   });
+   
+   // Step 3: Fade out quickly
+   playerLayTimeline.to(cardCopy, {
+       duration: 0.1, // Much faster
+       opacity: 0,
+       delay: 0.1 // Shorter delay
+   });
+ }
+
+// Animate lay card function - moved up for accessibility
+function animateLayCard(playerCardIndex, callback) {
+    const playerCardElement = document.querySelectorAll('#player-cards .card')[playerCardIndex];
+    const tableCenter = document.getElementById('table-cards');
+    
+    // Safety checks
+    if (!playerCardElement || !tableCenter) {
+        console.log('Missing elements for lay animation, skipping');
+        callback();
+        return;
+    }
+    
+    const tableBounds = tableCenter.getBoundingClientRect();
+    const cardBounds = playerCardElement.getBoundingClientRect();
+    const gameAreaRect = document.getElementById('game-area').getBoundingClientRect();
+    
+    // Calculate table center position
+    const targetX = (tableBounds.left - gameAreaRect.left) + tableBounds.width / 2 - cardBounds.width / 2;
+    const targetY = (tableBounds.top - gameAreaRect.top) + tableBounds.height / 2 - cardBounds.height / 2;
+    
+    // Create lay animation timeline
+    const layTimeline = gsap.timeline({
+        onComplete: callback
+    });
+    
+    // Step 1: Lift card up slightly
+    layTimeline.to(playerCardElement, {
+        duration: 0.1,
+        y: '-=20',
+        scale: 1.1,
+        ease: "power2.out"
+    });
+    
+    // Step 2: Arc motion to table center
+    layTimeline.to(playerCardElement, {
+        duration: 0.3,
+        x: targetX - (cardBounds.left - gameAreaRect.left),
+        y: targetY - (cardBounds.top - gameAreaRect.top),
+        rotation: (Math.random() - 0.5) * 30, // Random rotation for natural look
+        scale: 1,
+        ease: "power2.inOut",
+        transformOrigin: "center"
+    });
+    
+    // Step 3: Gentle bounce when landing
+    layTimeline.to(playerCardElement, {
+        duration: 0.1,
+        scale: 0.95,
+        ease: "power2.out"
+    });
+    
+    // Step 4: Return to normal scale
+    layTimeline.to(playerCardElement, {
+        duration: 0.1,
+        scale: 1,
+        ease: "power2.out"
+    });
+}
+ 
+// Helper functions for card creation - moved to top for online multiplayer access
+function getCardImagePath(card) {
+    // Convert suit symbols to standard names
+    const suitNames = {
+        '♠': 'spades',
+        '♥': 'hearts', 
+        '♦': 'diamonds',
+        '♣': 'clubs'
+    };
+    
+    const suitName = suitNames[card.suit];
+    if (!suitName) return null;
+    
+    // Convert card values to standard names
+    let valueName = card.value.toLowerCase();
+    if (valueName === 'a') valueName = 'ace';
+    if (valueName === 'j') valueName = 'jack';
+    if (valueName === 'q') valueName = 'queen'; 
+    if (valueName === 'k') valueName = 'king';
+    
+    // Create a cache key for this specific card
+    const cacheKey = `${valueName}_of_${suitName}`;
+    
+    // Check if we already have a cached URL for this card
+    if (imageCache.has(cacheKey)) {
+        return imageCache.get(cacheKey);
+    }
+    
+    // Create new URL with timestamp only once per card type
+    const timestamp = Date.now();
+    const imageUrl = `assets/cards/${valueName}_of_${suitName}.png?v=${timestamp}`;
+    
+    // Cache this URL for future use
+    imageCache.set(cacheKey, imageUrl);
+    
+    return imageUrl;
+}
+
+function getFaceCardDisplay(value, suit) {
+    if (['J', 'Q', 'K'].includes(value)) {
+        return value; // Show J/Q/K instead of suit for face cards
+    }
+    if (value === 'A') {
+        return 'A'; // Show A for Aces
+    }
+    return suit; // Show suit for number cards
+}
+
+function getCardFallbackHTML(value, suit, color) {
+    return `
+        <div class="card-inner">
+            <div class="card-value ${color}" style="position: absolute; top: 8px; left: 8px; font-size: 24px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">${value}</div>
+            <div class="card-suit ${color}" style="position: absolute; top: 36px; left: 8px; font-size: 22px; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">${suit}</div>
+            <div class="card-center ${color}" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 48px; font-weight: bold; text-shadow: 0 2px 4px rgba(0,0,0,0.3);">${getFaceCardDisplay(value, suit)}</div>
+            <div class="card-value ${color}" style="position: absolute; bottom: 8px; right: 8px; font-size: 24px; font-weight: bold; transform: rotate(180deg); text-shadow: 0 1px 2px rgba(0,0,0,0.3);">${value}</div>
+            <div class="card-suit ${color}" style="position: absolute; bottom: 36px; right: 8px; font-size: 22px; transform: rotate(180deg); text-shadow: 0 1px 2px rgba(0,0,0,0.3);">${suit}</div>
+        </div>
+    `;
+}
+
+function createCardElement(card, faceUp, index, totalCards) {
+    const cardDiv = document.createElement('div');
+    cardDiv.className = 'card';
+    cardDiv.dataset.index = index;
+    
+    if (faceUp && card) {
+        // Face up card with enhanced styling and custom graphics support
+        cardDiv.classList.add('card-front');
+        
+        // Check if we have custom graphics for this card
+        const cardImagePath = getCardImagePath(card);
+        
+        if (cardImagePath) {
+            // Use custom card image
+            cardDiv.innerHTML = `
+                <div class="card-inner custom-card">
+                    <img src="${cardImagePath}" alt="${card.value} of ${card.suit}" class="card-image" 
+                         onerror="this.parentElement.innerHTML = getCardFallbackHTML('${card.value}', '${card.suit}', '${card.color}');">
+                </div>
+            `;
+        } else {
+            // Use original text-based design as fallback
+            cardDiv.innerHTML = getCardFallbackHTML(card.value, card.suit, card.color);
+        }
+    } else {
+        // Face down card with pattern
+        cardDiv.classList.add('card-back');
+        cardDiv.innerHTML = `
+            <div class="card-back-pattern" style="
+                width: 100%;
+                height: 100%;
+                background: linear-gradient(45deg, #1e40af 25%, #3b82f6 25%, #3b82f6 50%, #1e40af 50%, #1e40af 75%, #3b82f6 75%);
+                background-size: 8px 8px;
+                border-radius: 8px;
+                position: relative;
+                overflow: hidden;
+            ">
+                <div style="
+                    position: absolute;
+                    top: 50%;
+                    left: 50%;
+                    transform: translate(-50%, -50%);
+                    color: white;
+                    font-size: 24px;
+                    font-weight: bold;
+                    text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+                ">🂠</div>
+            </div>
+        `;
+    }
+    
+    // Add subtle entrance animation class
+    cardDiv.classList.add('card-entering');
+    
+    return cardDiv;
+}
+
+// createAndAnimateCards function - moved to top for online multiplayer access
+function createAndAnimateCards() {
+    const playerCardsContainer = document.getElementById('player-cards');
+    const opponentCardsContainer = document.getElementById('opponent-cards');
+    let tableCardsDiv = document.getElementById('table-cards');
+    
+    // Safety check - if basic containers don't exist, skip animation
+    if (!playerCardsContainer || !opponentCardsContainer) {
+        console.log('Basic card containers not found, skipping createAndAnimateCards');
+        console.log('Player container:', !!playerCardsContainer);
+        console.log('Opponent container:', !!opponentCardsContainer);
+        return;
+    }
+    
+    // Create table-cards element if it doesn't exist (needed for online multiplayer)
+    if (!tableCardsDiv) {
+        console.log('Table cards container not found, creating it...');
+        const centerArea = document.querySelector('.center-area');
+        if (centerArea) {
+            // Create the table-cards container
+            centerArea.innerHTML = '<div class="table-cards" id="table-cards"></div>';
+            tableCardsDiv = document.getElementById('table-cards');
+            console.log('Table cards container created successfully');
+        } else {
+            console.log('Center area not found, cannot create table cards container');
+            return;
+        }
+    }
+    
+    // Clear containers first to prevent duplicate cards
+    playerCardsContainer.innerHTML = '';
+    opponentCardsContainer.innerHTML = '';
+    tableCardsDiv.innerHTML = '';
+    
+    const playerCardElements = [];
+    const opponentCardElements = [];
+    const tableCardElements = [];
+    
+    // Create player cards (face up) - start from deck position
+    playerHand.forEach((card, i) => {
+        const cardElement = createCardElement(card, true, i, playerHand.length);
+        cardElement.style.opacity = '0';
+        cardElement.style.transform = 'translate(-50px, -200px) rotate(0deg) scale(0.8)';
+        cardElement.addEventListener('click', () => playCard(i));
+        playerCardsContainer.appendChild(cardElement);
+        playerCardElements.push(cardElement);
+    });
+    
+    // Create opponent cards (face down) - start from deck position
+    opponentHand.forEach((card, i) => {
+        const cardElement = createCardElement(null, false, i, opponentHand.length);
+        cardElement.style.opacity = '0';
+        cardElement.style.transform = 'translate(-50px, 200px) rotate(0deg) scale(0.8)';
+        opponentCardsContainer.appendChild(cardElement);
+        opponentCardElements.push(cardElement);
+    });
+    
+    // Create table cards (face up) - start from deck position  
+    tableCards.forEach((card, i) => {
+        const cardElement = createCardElement(card, true, i, tableCards.length);
+        cardElement.style.opacity = '0';
+        cardElement.style.transform = 'translate(-50px, 0px) rotate(0deg) scale(0.8)';
+        cardElement.classList.add('table-card');
+        cardElement.addEventListener('click', () => selectTableCard(i));
+        tableCardsDiv.appendChild(cardElement);
+        tableCardElements.push(cardElement);
+    });
+    
+    // SIMPLIFIED ANIMATION - No complex GSAP timeline to avoid errors
+    try {
+        console.log('Starting simplified card dealing animation...');
+        
+        // Animate player cards - faster
+        playerCardElements.forEach((card, index) => {
+            setTimeout(() => {
+                if (card && card.parentNode) {
+                    gsap.to(card, {
+                        duration: 0.15, // Much faster
+                        opacity: 1,
+                        x: 0,
+                        y: 0,
+                        rotation: 0,
+                        scale: 1,
+                        ease: "power2.out"
+                    });
+                }
+            }, index * 25); // Shorter delay
+        });
+        
+        // Animate opponent cards - faster
+        opponentCardElements.forEach((card, index) => {
+            setTimeout(() => {
+                if (card && card.parentNode) {
+                    gsap.to(card, {
+                        duration: 0.15, // Much faster
+                        opacity: 1,
+                        x: 0,
+                        y: 0,
+                        rotation: 0,
+                        scale: 1,
+                        ease: "power2.out"
+                    });
+                }
+            }, (index + playerCardElements.length) * 25); // Shorter delay
+        });
+        
+        // Animate table cards - faster
+        tableCardElements.forEach((card, index) => {
+            setTimeout(() => {
+                if (card && card.parentNode) {
+                    gsap.to(card, {
+                        duration: 0.15, // Much faster
+                        opacity: 1,
+                        x: 0,
+                        y: 0,
+                        rotation: 0,
+                        scale: 1,
+                        ease: "power2.out"
+                    });
+                }
+            }, (index + playerCardElements.length + opponentCardElements.length) * 25); // Shorter delay
+        });
+        
+    } catch (error) {
+        console.error('Animation error, falling back to immediate display:', error);
+        // Fallback: Just show cards immediately
+        [...playerCardElements, ...opponentCardElements, ...tableCardElements].forEach(card => {
+            if (card) {
+                card.style.opacity = '1';
+                card.style.transform = 'translate(0, 0) rotate(0deg) scale(1)';
+            }
+        });
+    }
+    
+    // Position cards in hand formation
+    positionCardsInHand(playerCardElements, true);
+    positionCardsInHand(opponentCardElements, false);
+    positionTableCards(tableCardElements);
+    
+    // Update game UI after cards are positioned
+    setTimeout(() => {
+        console.log('About to call updateGameUI and updateCardVisuals...');
+        console.log('Player hand length:', playerHand.length);
+        console.log('Opponent hand length:', opponentHand.length);
+        console.log('Table cards length:', tableCards.length);
+        
+        updateGameUI();
+        updateCardVisuals();
+        updatePlayerAvatarInGameUI();
+        updateOpponentAvatarInGameUI();
+        
+        console.log('Checking if cards are in DOM...');
+        const playerCards = document.querySelectorAll('#player-cards .card');
+        const opponentCards = document.querySelectorAll('#opponent-cards .card');
+        const tableCardsInDOM = document.querySelectorAll('#table-cards .card');
+        console.log('Player cards in DOM:', playerCards.length);
+        console.log('Opponent cards in DOM:', opponentCards.length);
+        console.log('Table cards in DOM:', tableCardsInDOM.length);
+        
+        console.log(`=== DEAL ${currentDeal} COMPLETE ===`);
+        console.log(`Deck integrity: ${deck.length + tableCards.length + playerHand.length + opponentHand.length} = 52? ${deck.length + tableCards.length + playerHand.length + opponentHand.length === 52}`);
+    }, 2000);
+}
+
+// showGameArea function - moved to top for online multiplayer access
+function showGameArea() {
+    console.log('=== SHOW GAME AREA CALLED ===');
+    console.log('Setting display styles...');
+    
+    // Hide all other screens
+    const authScreen = document.getElementById('auth-screen');
+    const userDashboard = document.getElementById('user-dashboard');
+    const winningScreen = document.getElementById('winning-screen');
+    const loadingScreen = document.getElementById('loading-screen');
+    const mainMenu = document.getElementById('main-menu');
+    const difficultyMenu = document.getElementById('difficulty-menu');
+    const gameArea = document.getElementById('game-area');
+    
+    if (authScreen) authScreen.style.setProperty('display', 'none', 'important');
+    if (userDashboard) userDashboard.style.setProperty('display', 'none', 'important');
+    if (mainMenu) mainMenu.style.setProperty('display', 'none', 'important');
+    if (difficultyMenu) difficultyMenu.style.setProperty('display', 'none', 'important');
+    if (loadingScreen) loadingScreen.style.setProperty('display', 'none', 'important');
+    if (winningScreen) winningScreen.style.setProperty('display', 'none', 'important');
+    
+    // Show game area
+    if (gameArea) {
+        gameArea.style.setProperty('display', 'flex', 'important');
+        gameArea.style.setProperty('visibility', 'visible', 'important');
+        gameArea.style.setProperty('opacity', '1', 'important');
+    }
+    
+    // Prevent scrolling on mobile during game
+    if (window.innerWidth <= 768) {
+        document.body.classList.add('game-active');
+    }
+    
+    console.log('Game area display set to flex');
+    console.log('All screen elements checked and forced');
+    console.log('Game area final display:', gameArea ? gameArea.style.display : 'gameArea not found');
+}
+
+// playCard function - moved to top for online multiplayer access
+function playCard(cardIndex) {
+    console.log('=== PLAY CARD CALLED ===');
+    console.log('Card index:', cardIndex);
+    console.log('isOnlineGame:', window.isOnlineGame);
+    console.log('playerHand length:', playerHand.length);
+    console.log('currentPlayer:', currentPlayer);
+    
+    if (selectedPlayerCard === cardIndex) {
+        // Deselect card
+        selectedPlayerCard = null;
+        updateCardVisuals();
+        return;
+    }
+    
+    const playedCard = window.playerHand[cardIndex];
+    console.log(`Selected card: ${playedCard.value}${playedCard.suit}`);
+    console.log('Played card object:', playedCard);
+    console.log('Played card numericValue:', playedCard.numericValue);
+    
+    // Set selected card
+    selectedPlayerCard = cardIndex;
+    selectedTableCards = [];
+    
+    // Auto-execute for Jack (captures all table cards)
+    if (playedCard.value === 'J' && tableCards.length > 0) {
+        selectedTableCards = tableCards.map((_, index) => index);
+        executeAction('capture');
+        return;
+    }
+    
+    // Check for exact rank matches
+    const exactMatches = [];
+    tableCards.forEach((tableCard, index) => {
+        if (tableCard.value === playedCard.value) {
+            exactMatches.push(index);
+        }
+    });
+    
+    // Check for sum captures
+    const validCaptures = getValidCaptures(playedCard);
+    const sumCaptures = validCaptures.filter(capture => capture.type === 'sum');
+    
+    // Debug: Log all capture information
+    console.log(`DEBUG - Card: ${playedCard.value}${playedCard.suit}`);
+    console.log(`DEBUG - Exact matches: ${exactMatches.length}`, exactMatches);
+    console.log(`DEBUG - All valid captures: ${validCaptures.length}`, validCaptures);
+    console.log(`DEBUG - Sum captures: ${sumCaptures.length}`, sumCaptures);
+    console.log(`DEBUG - Table cards:`, tableCards.map(c => c.value + c.suit));
+    
+    // If only one capture option exists, auto-execute it
+    if (exactMatches.length === 1 && sumCaptures.length === 0) {
+        // Single exact match only
+        selectedTableCards = exactMatches;
+        executeAction('capture');
+        return;
+    } else if (exactMatches.length === 0 && sumCaptures.length === 1) {
+        // Single sum capture only
+        selectedTableCards = sumCaptures[0].cards;
+        executeAction('capture');
+        return;
+    } else if (exactMatches.length === 0 && sumCaptures.length === 0) {
+        // NO CAPTURES POSSIBLE - auto-lay the card
+        console.log(`No captures possible for ${playedCard.value}${playedCard.suit} - auto-laying card`);
+        executeAction('lay');
+        return;
+    }
+    
+    // Multiple capture options - show manual selection interface
+    updateCardVisuals();
+    
+    // Highlight suggested captures
+    if (exactMatches.length > 0) {
+        const tableCardElements = document.querySelectorAll('#table-cards .card');
+        exactMatches.forEach(index => {
+            if (tableCardElements[index]) {
+                tableCardElements[index].classList.add('suggested');
+            }
+        });
+    }
+}
+
+// positionCardsInHand function - moved to top for online multiplayer access
+function positionCardsInHand(cards, isPlayer) {
+    if (!cards || cards.length === 0) return;
+    
+    const containerWidth = 400;
+    const cardWidth = 60;
+    const maxOverlap = 40;
+    
+    let overlapAmount = Math.min(maxOverlap, (containerWidth - cardWidth) / Math.max(1, cards.length - 1));
+    if (cards.length === 1) overlapAmount = 0;
+    
+    const totalWidth = cardWidth + (cards.length - 1) * overlapAmount;
+    const centerOffset = totalWidth / 2 - cardWidth / 2;
+    
+    cards.forEach((card, index) => {
+        const x = (index * overlapAmount) - centerOffset;
+        const y = 0;
+        
+        // Add slight rotation for more natural hand appearance
+        const rotation = isPlayer ? (index - (cards.length - 1) / 2) * 3 : 0;
+        
+        const originalTransform = {
+            x: x,
+            y: y,
+            rotation: rotation,
+            scale: 1,
+            zIndex: index + 1
+        };
+        
+        card._originalTransform = originalTransform;
+        
+        gsap.killTweensOf(card);
+        
+        gsap.set(card, {
+            x: originalTransform.x,
+            y: originalTransform.y,
+            rotation: originalTransform.rotation,
+            scale: originalTransform.scale,
+            zIndex: originalTransform.zIndex,
+            transformOrigin: "bottom center"
+        });
+    });
+}
+
+// positionTableCards function - moved to top for online multiplayer access
+function positionTableCards(cards) {
+    if (!cards || cards.length === 0) return;
+    
+    const containerWidth = 400;
+    const cardWidth = 60;
+    const maxOverlap = 50;
+    
+    let overlapAmount = Math.min(maxOverlap, (containerWidth - cardWidth) / Math.max(1, cards.length - 1));
+    if (cards.length === 1) overlapAmount = 0;
+    
+    const totalWidth = cardWidth + (cards.length - 1) * overlapAmount;
+    const centerOffset = totalWidth / 2 - cardWidth / 2;
+    
+    cards.forEach((card, index) => {
+        const x = (index * overlapAmount) - centerOffset;
+        const y = 0;
+        
+        const originalTransform = {
+            x: x,
+            y: y,
+            rotation: 0,
+            scale: 1,
+            zIndex: index + 1
+        };
+        
+        card._originalTransform = originalTransform;
+        
+        gsap.killTweensOf(card);
+        
+        gsap.set(card, {
+            x: originalTransform.x,
+            y: originalTransform.y,
+            rotation: originalTransform.rotation,
+            scale: originalTransform.scale,
+            zIndex: originalTransform.zIndex,
+            transformOrigin: "center"
+        });
+        
+        // Add hover effects with stored transform reference
+        const currentOriginalTransform = { ...originalTransform };
+        
+        card._tableMouseEnterHandler = () => {
+            gsap.killTweensOf(card);
+            gsap.to(card, {
+                duration: 0.05,
+                x: currentOriginalTransform.x,
+                y: currentOriginalTransform.y - 8,
+                rotation: currentOriginalTransform.rotation,
+                scale: currentOriginalTransform.scale,
+                ease: "power2.out"
+            });
+            
+            card.style.boxShadow = '0 3px 12px rgba(34, 197, 94, 0.25), 0 0 0 1px rgba(34, 197, 94, 0.15)';
+        };
+        
+        card._tableMouseLeaveHandler = () => {
+            if (!card.classList.contains('selected')) {
+                gsap.killTweensOf(card);
+                gsap.to(card, {
+                    duration: 0.05,
+                    x: currentOriginalTransform.x,
+                    y: currentOriginalTransform.y,
+                    rotation: currentOriginalTransform.rotation,
+                    scale: currentOriginalTransform.scale,
+                    ease: "power2.out"
+                });
+                
+                card.style.boxShadow = '';
+            }
+        };
+        
+        card.addEventListener('mouseenter', card._tableMouseEnterHandler);
+        card.addEventListener('mouseleave', card._tableMouseLeaveHandler);
+    });
+}
+
+// Create game UI panel function
+function createGameUI() {
+    // Remove existing game UI if it exists
+    const existingGameUI = document.getElementById('game-ui');
+    if (existingGameUI) {
+        existingGameUI.remove();
+    }
+    
+    // Create the game UI container
+    const gameUI = document.createElement('div');
+    gameUI.id = 'game-ui';
+    gameUI.className = 'game-ui';
+    
+    // Create the game info panel
+    const gameInfo = document.createElement('div');
+    gameInfo.className = 'game-info';
+    gameInfo.innerHTML = `
+        <div class="game-info-header">
+            <h3>Konchina</h3>
+            <div class="deal-indicator">Deal ${currentDeal}</div>
+        </div>
+        
+        <div class="score-section">
+            <div class="score-title">Score</div>
+            <div class="score-display">
+                <div class="player-score">
+                    <div class="score-avatar player-avatar-small" id="game-player-avatar">👤</div>
+                    <div class="score-info">
+                        <div class="score-label">You</div>
+                        <div class="score-value" id="player-score">${gameScore.player}</div>
+                    </div>
+                </div>
+                <div class="score-divider">-</div>
+                                 <div class="opponent-score">
+                     <div class="score-avatar opponent-avatar-small" id="game-opponent-avatar">
+                         <svg viewBox="0 0 24 24" fill="currentColor">
+                             <path d="M12 2C13.1 2 14 2.9 14 4C14 5.1 13.1 6 12 6C10.9 6 10 5.1 10 4C10 2.9 10.9 2 12 2ZM21 9V7L15 7V9C15 11.8 12.8 14 10 14S5 11.8 5 9V7L3 7V9C3 12.5 5.6 15.4 9 15.9V22H11V15.9C14.4 15.4 17 12.5 17 9H21Z"/>
+                         </svg>
+                     </div>
+                     <div class="score-info">
+                         <div class="score-label" id="opponent-label">AI</div>
+                         <div class="score-value" id="opponent-score">${gameScore.opponent}</div>
+                     </div>
+                 </div>
+            </div>
+        </div>
+        
+        <div class="cards-info">
+            <div class="card-count-row">
+                <div class="card-count-item">
+                    <div class="count-label">Your Cards</div>
+                    <div class="count-value" id="player-card-count">${playerHand.length}</div>
+                </div>
+                <div class="card-count-item">
+                    <div class="count-label">Table</div>
+                    <div class="count-value" id="table-card-count">${tableCards.length}</div>
+                </div>
+                <div class="card-count-item">
+                    <div class="count-label">AI Cards</div>
+                    <div class="count-value" id="opponent-card-count">${opponentHand.length}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="action-buttons" id="action-buttons" style="display: none;">
+            <button class="action-btn primary" id="capture-btn" onclick="executeAction('capture')">Capture</button>
+            <button class="action-btn" id="lay-btn" onclick="executeAction('lay')">Lay Card</button>
+        </div>
+    `;
+    
+    gameUI.appendChild(gameInfo);
+    
+    // Add to game area
+    const gameArea = document.getElementById('game-area');
+    if (gameArea) {
+        gameArea.appendChild(gameUI);
+    }
+    
+    // Update player avatar if available
+    updatePlayerAvatarInGameUI();
+}
+
+// Essential UI functions moved to top for online multiplayer access
+function updateGameUI() {
+    const currentPlayerElement = document.getElementById('current-player');
+    const playerScoreElement = document.getElementById('player-score');
+    const opponentScoreElement = document.getElementById('opponent-score');
+    const roundElement = document.getElementById('current-round');
+    const dealElement = document.getElementById('current-deal');
+    const playerCardCountElement = document.getElementById('player-card-count');
+    const tableCardCountElement = document.getElementById('table-card-count');
+    const opponentCardCountElement = document.getElementById('opponent-card-count');
+    const dealIndicator = document.querySelector('.deal-indicator');
+    
+    if (currentPlayerElement) {
+        currentPlayerElement.textContent = currentPlayer === 0 ? "Your Turn" : "Opponent's Turn";
+        currentPlayerElement.style.color = currentPlayer === 0 ? '#10b981' : '#f59e0b';
+    }
+    
+    if (playerScoreElement) playerScoreElement.textContent = gameScore.player;
+    if (opponentScoreElement) opponentScoreElement.textContent = gameScore.opponent;
+    if (roundElement) roundElement.textContent = currentRound;
+    if (dealElement) dealElement.textContent = currentDeal;
+    if (playerCardCountElement) playerCardCountElement.textContent = playerHand.length;
+    if (tableCardCountElement) tableCardCountElement.textContent = tableCards.length;
+    if (opponentCardCountElement) opponentCardCountElement.textContent = opponentHand.length;
+    if (dealIndicator) dealIndicator.textContent = `Deal ${currentDeal}`;
+}
+
+// Update player avatar in game UI
+function updatePlayerAvatarInGameUI() {
+    const gamePlayerAvatar = document.getElementById('game-player-avatar');
+    if (gamePlayerAvatar && window.currentUserData?.profilePicture) {
+        gamePlayerAvatar.style.setProperty('--avatar-url', `url(${window.currentUserData.profilePicture})`);
+        gamePlayerAvatar.classList.add('has-image');
+        gamePlayerAvatar.textContent = '';
+    }
+}
+
+// Update opponent avatar and info in game UI
+function updateOpponentAvatarInGameUI() {
+    const gameOpponentAvatar = document.getElementById('game-opponent-avatar');
+    const opponentLabel = document.getElementById('opponent-label');
+    
+    // Check if we're in an online game and have opponent data
+    if (isOnlineGame && window.opponentData) {
+        // Update opponent avatar
+        if (gameOpponentAvatar && window.opponentData.profilePicture) {
+            gameOpponentAvatar.style.setProperty('--avatar-url', `url(${window.opponentData.profilePicture})`);
+            gameOpponentAvatar.classList.add('has-image');
+            gameOpponentAvatar.textContent = '';
+        } else if (gameOpponentAvatar) {
+            // Fallback to emoji if no profile picture
+            gameOpponentAvatar.classList.remove('has-image');
+            gameOpponentAvatar.textContent = '🤖';
+        }
+        
+        // Update opponent name
+        if (opponentLabel) {
+            opponentLabel.textContent = window.opponentData.username || 'Opponent';
+        }
+    } else {
+        // Offline game - show AI
+        if (gameOpponentAvatar) {
+            gameOpponentAvatar.classList.remove('has-image');
+            gameOpponentAvatar.textContent = '🤖';
+        }
+        if (opponentLabel) {
+            opponentLabel.textContent = 'AI';
+        }
+    }
+}
+
+// updateGameDisplay function - moved to top for online multiplayer access
+function updateGameDisplay() {
+    // Get existing containers
+    const playerCardsContainer = document.getElementById('player-cards');
+    const opponentCardsContainer = document.getElementById('opponent-cards');
+    const tableCardsContainer = document.getElementById('table-cards');
+    
+    // Only update if the number of cards has changed to avoid unnecessary DOM manipulation
+    const currentPlayerCards = playerCardsContainer.children.length;
+    const currentOpponentCards = opponentCardsContainer.children.length;
+    const currentTableCards = tableCardsContainer.children.length;
+    
+    // Only recreate player cards if count changed
+    if (currentPlayerCards !== playerHand.length) {
+        playerCardsContainer.innerHTML = '';
+        const playerCardElements = [];
+        playerHand.forEach((card, index) => {
+            const cardElement = createCardElement(card, true, index, playerHand.length);
+            cardElement.addEventListener('click', () => playCard(index));
+            playerCardsContainer.appendChild(cardElement);
+            playerCardElements.push(cardElement);
+        });
+        positionCardsInHand(playerCardElements, true);
+    }
+    
+    // Only recreate opponent cards if count changed
+    if (currentOpponentCards !== opponentHand.length) {
+        opponentCardsContainer.innerHTML = '';
+        const opponentCardElements = [];
+        opponentHand.forEach((card, index) => {
+            const cardElement = createCardElement(null, false, index, opponentHand.length);
+            opponentCardsContainer.appendChild(cardElement);
+            opponentCardElements.push(cardElement);
+        });
+        positionCardsInHand(opponentCardElements, false);
+    }
+    
+    // Only recreate table cards if count changed
+    if (currentTableCards !== tableCards.length) {
+        tableCardsContainer.innerHTML = '';
+        const tableCardElements = [];
+        tableCards.forEach((card, index) => {
+            const cardElement = createCardElement(card, true, index, tableCards.length);
+            cardElement.classList.add('table-card');
+            cardElement.addEventListener('click', () => selectTableCard(index));
+            tableCardsContainer.appendChild(cardElement);
+            tableCardElements.push(cardElement);
+        });
+        positionTableCards(tableCardElements);
+    }
+    
+    // Update UI elements
+    updateGameUI();
+    updateCardVisuals();
+    updatePlayerAvatarInGameUI();
+    updateOpponentAvatarInGameUI();
+}
+
+// updateCardVisuals function - moved to top for online multiplayer access
+function updateCardVisuals() {
+    const playerCards = document.querySelectorAll('#player-cards .card');
+    const tableCards = document.querySelectorAll('#table-cards .card');
+    
+    // Update player cards - remove all turn-based restrictions
+    playerCards.forEach((card, index) => {
+        card.classList.remove('selected', 'disabled');
+        card.removeAttribute('disabled');
+        
+        if (selectedPlayerCard === index) {
+            card.classList.add('selected');
+        }
+    });
+    
+    // Update table cards
+    tableCards.forEach((card, index) => {
+        card.classList.remove('selected', 'capturable');
+        
+        if (selectedTableCards.includes(index)) {
+            card.classList.add('selected');
+        }
+        
+        if (selectedPlayerCard !== null) {
+            const playerCard = playerHand[selectedPlayerCard];
+            const tableCard = tableCards[index];
+            
+            if (playerCard && canCapture(playerCard, [tableCard])) {
+                card.classList.add('capturable');
+            }
+        }
+    });
+}
+
+// getValidCaptures function - moved to top for online multiplayer access
+function getValidCaptures(playedCard) {
+    const validCaptures = [];
+    
+    // Jack captures ALL table cards
+    if (playedCard.value === 'J') {
+        if (tableCards.length > 0) {
+            validCaptures.push({
+                type: 'jack',
+                cards: tableCards.map((_, index) => index),
+                description: `Jack captures all ${tableCards.length} table cards`
+            });
+        }
+        return validCaptures; // Jack can only capture all or nothing
+    }
+    
+    // Capture by rank (exact match)
+    tableCards.forEach((tableCard, index) => {
+        if (tableCard.value === playedCard.value) {
+            validCaptures.push({
+                type: 'rank',
+                cards: [index],
+                description: `Capture ${tableCard.value} with ${playedCard.value}`
+            });
+        }
+    });
+    
+    // Capture by sum (only for number cards)
+    if (playedCard.numericValue > 0) {
+        const sumCaptures = findSumCaptures(playedCard.numericValue);
+        validCaptures.push(...sumCaptures);
+    }
+    
+    return validCaptures;
+}
+
+// findSumCaptures helper function
+function findSumCaptures(targetSum) {
+    const captures = [];
+    const numericTableCards = tableCards.map((card, index) => ({
+        index,
+        value: card.numericValue,
+        card
+    })).filter(item => item.value > 0); // Only number cards can be used in sums
+    
+    // Find all combinations that sum to target
+    function findCombinations(cards, target, current = [], start = 0) {
+        if (target === 0 && current.length > 1) { // Need at least 2 cards for sum capture
+            captures.push({
+                type: 'sum',
+                cards: current.map(item => item.index),
+                description: `Capture ${current.map(item => item.card.value).join('+')} = ${targetSum}`
+            });
+            return;
+        }
+        
+        for (let i = start; i < cards.length; i++) {
+            const card = cards[i];
+            if (card.value <= target) {
+                findCombinations(cards, target - card.value, [...current, card], i + 1);
+            }
+        }
+    }
+    
+    findCombinations(numericTableCards, targetSum);
+    return captures;
+}
+
 // Authentication state listener
 document.addEventListener('DOMContentLoaded', function() {
     // Check if Firebase is loaded
@@ -112,6 +1342,13 @@ document.addEventListener('click', function(event) {
             selectGameMode('practice');
         } else if (modeCard.querySelector('h4').textContent.includes('Ranked')) {
             selectGameMode('ranked');
+        } else if (modeCard.querySelector('h4').textContent.includes('Play Online')) {
+            // Check if Firebase is available for online play
+            if (!window.db) {
+                showGameEndMessage('Online play requires Firebase. Please check your connection.', 'error');
+                return;
+            }
+            selectGameMode('online');
         }
     }
     
@@ -1035,6 +2272,14 @@ function selectGameMode(mode) {
                 showInsufficientCoinsMessage();
             }
             break;
+        case 'online':
+            // Online mode costs 1000 coins
+            if (canAffordGame(1000)) {
+                showOnlineConfirmation();
+            } else {
+                showInsufficientCoinsMessage();
+            }
+            break;
         default:
             startGameDirectly('practice');
     }
@@ -1042,6 +2287,1146 @@ function selectGameMode(mode) {
 
 function showInsufficientCoinsMessage() {
     alert('Insufficient coins! Play practice mode to improve your skills, or win ranked games to earn more coins.');
+}
+
+function showOnlineConfirmation() {
+    const confirmation = document.createElement('div');
+    confirmation.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+        font-family: 'Inter', sans-serif;
+    `;
+    
+    confirmation.innerHTML = `
+        <div style="
+            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 400px;
+            text-align: center;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        ">
+            <h3 style="color: white; font-size: 1.5rem; margin-bottom: 20px; font-weight: 700;">Play Online</h3>
+            <p style="color: rgba(255, 255, 255, 0.8); margin-bottom: 30px; line-height: 1.6;">
+                Entry cost: <strong style="color: #f59e0b;">1000 coins</strong><br>
+                Win reward: <strong style="color: #10b981;">+3000 coins</strong><br><br>
+                You'll be matched with another player online.
+            </p>
+            <div style="display: flex; gap: 15px; justify-content: center;">
+                <button id="confirm-online" style="
+                    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+                    color: white;
+                    border: none;
+                    border-radius: 12px;
+                    padding: 12px 24px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.3s ease;
+                ">Start Matchmaking</button>
+                <button id="cancel-online" style="
+                    background: rgba(255, 255, 255, 0.1);
+                    color: white;
+                    border: none;
+                    border-radius: 12px;
+                    padding: 12px 24px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.3s ease;
+                ">Cancel</button>
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(confirmation);
+    
+    document.getElementById('confirm-online').addEventListener('click', () => {
+        confirmation.remove();
+        deductCoins(1000);
+        startOnlineMatchmaking();
+    });
+    
+    document.getElementById('cancel-online').addEventListener('click', () => {
+        confirmation.remove();
+    });
+}
+
+// Online Multiplayer System
+let currentGameRoom = null;
+let gameRoomListener = null;
+let isHost = false;
+
+async function startOnlineMatchmaking() {
+    console.log('=== STARTING ONLINE MATCHMAKING ===');
+    console.log('Current user:', currentUser);
+    console.log('Firebase DB:', window.db);
+    console.log('User coins:', userCoins);
+    
+    if (!currentUser) {
+        console.log('ERROR: No current user logged in');
+        showGameEndMessage('Please log in to play online.', 'error');
+        return;
+    }
+    
+    if (!window.db) {
+        console.log('ERROR: Firebase database not available');
+        showGameEndMessage('Firebase connection not available. Please refresh and try again.', 'error');
+        return;
+    }
+    
+    console.log('Showing matchmaking screen...');
+    showMatchmakingScreen();
+    
+    try {
+        console.log('Looking for existing waiting rooms...');
+        // First, try to join an existing waiting room
+        const existingRoom = await findWaitingRoom();
+        
+        if (existingRoom) {
+            console.log('Found existing room:', existingRoom);
+            // Join existing room
+            await joinGameRoom(existingRoom.id);
+        } else {
+            console.log('No existing rooms found, creating new room...');
+            // Create new room
+            await createGameRoom();
+        }
+    } catch (error) {
+        console.error('Matchmaking error:', error);
+        hideMatchmakingScreen();
+        showGameEndMessage('Failed to start matchmaking. Please try again.', 'error');
+    }
+}
+
+function showMatchmakingScreen() {
+    const matchmakingScreen = document.createElement('div');
+    matchmakingScreen.id = 'matchmaking-screen';
+    matchmakingScreen.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+        font-family: 'Inter', sans-serif;
+    `;
+    
+    matchmakingScreen.innerHTML = `
+        <div style="text-align: center; color: white;">
+            <div style="width: 80px; height: 80px; border: 4px solid rgba(59, 130, 246, 0.3); border-top: 4px solid #3b82f6; border-radius: 50%; animation: spin 2s linear infinite; margin: 0 auto 30px;"></div>
+            <h2 style="font-size: 2rem; margin-bottom: 15px; font-weight: 700;">Finding Opponent...</h2>
+            <p style="color: rgba(255, 255, 255, 0.7); font-size: 1.1rem; margin-bottom: 40px;">Please wait while we match you with another player</p>
+            <button id="cancel-matchmaking" style="
+                background: rgba(255, 255, 255, 0.1);
+                color: white;
+                border: none;
+                border-radius: 12px;
+                padding: 15px 30px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s ease;
+            ">Cancel</button>
+        </div>
+    `;
+    
+    document.body.appendChild(matchmakingScreen);
+    
+    document.getElementById('cancel-matchmaking').addEventListener('click', () => {
+        cancelMatchmaking();
+    });
+}
+
+function hideMatchmakingScreen() {
+    const matchmakingScreen = document.getElementById('matchmaking-screen');
+    if (matchmakingScreen) {
+        matchmakingScreen.remove();
+    }
+}
+
+async function findWaitingRoom() {
+    console.log('=== FINDING WAITING ROOM ===');
+    if (!window.db) {
+        console.log('No Firebase DB available');
+        return null;
+    }
+    
+    try {
+        console.log('Creating Firestore query...');
+        const roomsQuery = window.query(
+            window.collection(window.db, 'gameRooms'),
+            window.where('status', '==', 'waiting'),
+            window.where('currentPlayers', '<', 2),
+            window.limit(1)
+        );
+        
+        console.log('Executing query...');
+        const querySnapshot = await window.getDocs(roomsQuery);
+        console.log('Query completed. Empty?', querySnapshot.empty);
+        console.log('Number of docs found:', querySnapshot.docs.length);
+        
+        if (!querySnapshot.empty) {
+            const doc = querySnapshot.docs[0];
+            const roomData = { id: doc.id, ...doc.data() };
+            console.log('Found waiting room:', roomData);
+            return roomData;
+        }
+        
+        console.log('No waiting rooms found');
+        return null;
+    } catch (error) {
+        console.error('Error finding waiting room:', error);
+        console.error('Error details:', error.message);
+        return null;
+    }
+}
+
+async function createGameRoom() {
+    console.log('=== CREATING GAME ROOM ===');
+    console.log('Firebase DB:', window.db);
+    console.log('Current user:', currentUser);
+    
+    if (!window.db || !currentUser) {
+        console.log('ERROR: Missing DB or user');
+        return;
+    }
+    
+    isHost = true;
+    const gameRoomId = 'game_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    console.log('Generated room ID:', gameRoomId);
+    
+    const gameRoomData = {
+        id: gameRoomId,
+        status: 'waiting',
+        gameMode: 'online',
+        maxPlayers: 2,
+        currentPlayers: 1,
+        createdBy: currentUser.uid,
+        createdAt: new Date(),
+        players: {
+            [currentUser.uid]: {
+                userId: currentUser.uid,
+                username: currentUser.displayName || 'Player',
+                profilePicture: window.currentUserData?.profilePicture || null,
+                joinedAt: new Date(),
+                isReady: false,
+                coins: userCoins
+            }
+        },
+        gameState: null,
+        winner: null,
+        finishedAt: null
+    };
+    
+    console.log('Game room data to create:', gameRoomData);
+    
+    try {
+        console.log('Writing to Firestore...');
+        await window.setDoc(window.doc(window.db, 'gameRooms', gameRoomId), gameRoomData);
+        currentGameRoom = gameRoomId;
+        console.log('Room created successfully, starting listener...');
+        listenToGameRoom(gameRoomId);
+        console.log('Created game room:', gameRoomId);
+    } catch (error) {
+        console.error('Error creating game room:', error);
+        console.error('Error details:', error.message);
+        throw error;
+    }
+}
+
+async function joinGameRoom(roomId) {
+    console.log('=== JOINING GAME ROOM ===');
+    console.log('Room ID to join:', roomId);
+    console.log('Firebase DB:', window.db);
+    console.log('Current user:', currentUser);
+    
+    if (!window.db || !currentUser) {
+        console.log('ERROR: Missing DB or user for joining');
+        return;
+    }
+    
+    isHost = false;
+    currentGameRoom = roomId;
+    
+    try {
+        console.log('Getting room document...');
+        const roomRef = window.doc(window.db, 'gameRooms', roomId);
+        const roomDoc = await window.getDoc(roomRef);
+        
+        if (!roomDoc.exists()) {
+            console.log('ERROR: Game room not found');
+            throw new Error('Game room not found');
+        }
+        
+        const roomData = roomDoc.data();
+        console.log('Found room data:', roomData);
+        
+        // Add current user to the room
+        const updatedPlayers = {
+            ...roomData.players,
+            [currentUser.uid]: {
+                userId: currentUser.uid,
+                username: currentUser.displayName || 'Player',
+                profilePicture: window.currentUserData?.profilePicture || null,
+                joinedAt: new Date(),
+                isReady: false,
+                coins: userCoins
+            }
+        };
+        
+        console.log('Updated players object:', updatedPlayers);
+        console.log('Number of players after join:', Object.keys(updatedPlayers).length);
+        
+        const updateData = {
+            players: updatedPlayers,
+            currentPlayers: Object.keys(updatedPlayers).length,
+            status: Object.keys(updatedPlayers).length >= 2 ? 'ready' : 'waiting'
+        };
+        console.log('Update data to send:', updateData);
+        
+        console.log('Updating room document...');
+        await window.updateDoc(roomRef, updateData);
+        
+        console.log('Starting room listener...');
+        listenToGameRoom(roomId);
+        console.log('Successfully joined game room:', roomId);
+    } catch (error) {
+        console.error('Error joining game room:', error);
+        console.error('Error details:', error.message);
+        throw error;
+    }
+}
+
+function listenToGameRoom(roomId) {
+    console.log('=== SETTING UP ROOM LISTENER ===');
+    console.log('Room ID:', roomId);
+    console.log('Firebase DB:', window.db);
+    console.log('Existing listener?', gameRoomListener !== null);
+    
+    if (!window.db || gameRoomListener) {
+        console.log('Skipping listener setup - DB missing or listener exists');
+        return;
+    }
+    
+    const roomRef = window.doc(window.db, 'gameRooms', roomId);
+    console.log('Room reference created:', roomRef);
+    
+    console.log('Setting up onSnapshot listener...');
+    gameRoomListener = window.onSnapshot(roomRef, (doc) => {
+        console.log('=== ROOM UPDATE RECEIVED ===');
+        console.log('Document exists?', doc.exists());
+        
+        if (doc.exists()) {
+            const roomData = doc.data();
+            console.log('Room data received:', roomData);
+            console.log('Room status:', roomData.status);
+            console.log('Number of players:', Object.keys(roomData.players || {}).length);
+            handleGameRoomUpdate(roomData);
+        } else {
+            console.log('Game room deleted');
+            handleGameRoomDeleted();
+        }
+    }, (error) => {
+        console.error('Error listening to game room:', error);
+        console.error('Error details:', error.message);
+    });
+    
+    console.log('Room listener set up successfully');
+}
+
+function handleGameRoomUpdate(roomData) {
+    console.log('=== HANDLING ROOM UPDATE ===');
+    console.log('Room data received:', roomData);
+    console.log('Room status:', roomData.status);
+    console.log('Number of players:', Object.keys(roomData.players || {}).length);
+    console.log('Player list:', Object.keys(roomData.players || {}));
+    
+    if (roomData.status === 'ready' && Object.keys(roomData.players).length >= 2) {
+        console.log('Room is ready with 2+ players - showing ready screen');
+        // Both players joined, show ready screen
+        hideMatchmakingScreen();
+        showGameReadyScreen(roomData);
+    } else if (roomData.status === 'active' && roomData.gameState) {
+        console.log('Game is active - starting online game');
+        // Game started, hide ready screen and start game
+        hideGameReadyScreen();
+        startOnlineGame(roomData);
+    } else if (roomData.status === 'finished') {
+        console.log('Game is finished');
+        // Game finished
+        handleOnlineGameEnd(roomData);
+    } else {
+        console.log('Room update - no action taken');
+        console.log('Status:', roomData.status);
+        console.log('Players count:', Object.keys(roomData.players || {}).length);
+    }
+}
+
+function showGameReadyScreen(roomData) {
+    console.log('=== SHOWING GAME READY SCREEN ===');
+    console.log('Room data received:', roomData);
+    console.log('Players in room:', Object.keys(roomData.players));
+    console.log('Current user ID:', currentUser?.uid);
+    
+    // Remove existing ready screen first
+    hideGameReadyScreen();
+    
+    const readyScreen = document.createElement('div');
+    readyScreen.id = 'game-ready-screen';
+    readyScreen.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+        font-family: 'Inter', sans-serif;
+    `;
+    
+    const players = Object.values(roomData.players);
+    console.log('Players array:', players);
+    
+    const currentPlayerData = roomData.players[currentUser.uid];
+    console.log('Current player data:', currentPlayerData);
+    
+    // Log each player's ready status
+    players.forEach((player, index) => {
+        console.log(`Player ${index + 1}: ${player.username} - Ready: ${player.isReady}`);
+    });
+    
+    readyScreen.innerHTML = `
+        <div style="text-align: center; color: white; max-width: 500px;">
+            <h2 style="font-size: 2.5rem; margin-bottom: 30px; font-weight: 700;">Game Ready!</h2>
+            
+            <div style="display: flex; justify-content: space-around; margin-bottom: 40px;">
+                ${players.map(player => `
+                    <div style="text-align: center;">
+                        <div style="width: 80px; height: 80px; border-radius: 50%; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); display: flex; align-items: center; justify-content: center; margin: 0 auto 15px; ${player.profilePicture ? `background-image: url(${player.profilePicture}); background-size: cover; background-position: center; font-size: 0;` : 'font-size: 2rem;'}">${player.profilePicture ? '' : '👤'}</div>
+                        <h3 style="font-size: 1.2rem; margin-bottom: 5px;">${player.username}</h3>
+                        <div style="color: ${player.isReady ? '#10b981' : '#f59e0b'}; font-weight: 600;">
+                            ${player.isReady ? '✓ Ready' : '⏳ Getting Ready...'}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+            
+            <button id="ready-button" style="
+                background: ${currentPlayerData.isReady ? 'rgba(255, 255, 255, 0.1)' : 'linear-gradient(135deg, #10b981 0%, #059669 100%)'};
+                color: white;
+                border: none;
+                border-radius: 12px;
+                padding: 15px 40px;
+                font-size: 1.1rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s ease;
+                margin-bottom: 20px;
+            ">${currentPlayerData.isReady ? 'Ready!' : 'Ready Up'}</button>
+            
+            <p style="color: rgba(255, 255, 255, 0.7); font-size: 0.9rem;">Game will start when both players are ready</p>
+        </div>
+    `;
+    
+    document.body.appendChild(readyScreen);
+    
+    const readyButton = document.getElementById('ready-button');
+    console.log('Setting up ready button event listener...');
+    console.log('Current player ready status:', currentPlayerData.isReady);
+    
+    // Always add event listener, but only allow clicking if not ready
+    readyButton.addEventListener('click', () => {
+        console.log('Ready button clicked, current ready status:', currentPlayerData.isReady);
+        if (!currentPlayerData.isReady) {
+            console.log('Player not ready, calling setPlayerReady()');
+            setPlayerReady();
+        } else {
+            console.log('Player already ready, ignoring click');
+        }
+    });
+}
+
+function hideGameReadyScreen() {
+    const readyScreen = document.getElementById('game-ready-screen');
+    if (readyScreen) {
+        readyScreen.remove();
+    }
+}
+
+async function setPlayerReady() {
+    console.log('=== SETTING PLAYER READY ===');
+    console.log('Current game room:', currentGameRoom);
+    console.log('Current user:', currentUser?.uid);
+    console.log('Is host:', isHost);
+    
+    if (!currentGameRoom || !currentUser) {
+        console.log('ERROR: Missing game room or user');
+        return;
+    }
+    
+    try {
+        console.log('Getting room document...');
+        const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
+        const roomDoc = await window.getDoc(roomRef);
+        
+        if (roomDoc.exists()) {
+            const roomData = roomDoc.data();
+            console.log('Current room data:', roomData);
+            console.log('Current players before update:', roomData.players);
+            
+            const updatedPlayers = {
+                ...roomData.players,
+                [currentUser.uid]: {
+                    ...roomData.players[currentUser.uid],
+                    isReady: true
+                }
+            };
+            
+            console.log('Updated players object:', updatedPlayers);
+            
+            console.log('Updating room document...');
+            await window.updateDoc(roomRef, {
+                players: updatedPlayers
+            });
+            console.log('Room document updated successfully');
+            
+            // Check if all players are ready
+            const allReady = Object.values(updatedPlayers).every(player => player.isReady);
+            console.log('All players ready?', allReady);
+            console.log('Is host?', isHost);
+            console.log('Room created by:', roomData.createdBy);
+            console.log('Current user ID:', currentUser.uid);
+            console.log('Am I the creator?', roomData.createdBy === currentUser.uid);
+            
+            // Use createdBy field to determine host, not isHost variable
+            const amIHost = roomData.createdBy === currentUser.uid;
+            
+            if (allReady && amIHost) {
+                console.log('All ready and I am the room creator - starting game...');
+                // Host starts the game
+                await startGameForRoom();
+            } else if (allReady && !amIHost) {
+                console.log('All ready but I am not the host - waiting for host to start game...');
+            } else {
+                console.log('Not all players ready yet');
+            }
+        } else {
+            console.log('ERROR: Room document does not exist');
+        }
+    } catch (error) {
+        console.error('Error setting player ready:', error);
+        console.error('Error details:', error.message);
+    }
+}
+
+async function startGameForRoom() {
+    console.log('=== START GAME FOR ROOM CALLED ===');
+    console.log('Current game room:', currentGameRoom);
+    console.log('Is host:', isHost);
+    console.log('Current user:', currentUser?.uid);
+    
+    if (!currentGameRoom) {
+        console.log('ERROR: Missing game room');
+        return;
+    }
+    
+    // Get room data to verify host status
+    const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
+    const roomDoc = await window.getDoc(roomRef);
+    const roomData = roomDoc.data();
+    const amIHost = roomData.createdBy === currentUser.uid;
+    
+    console.log('Room created by:', roomData.createdBy);
+    console.log('Am I the creator/host?', amIHost);
+    
+    if (!amIHost) {
+        console.log('ERROR: Not the host, cannot start game');
+        return;
+    }
+    
+    try {
+        console.log('Initializing game state...');
+        // Initialize game state with random starting player
+        const randomStartingPlayer = Math.floor(Math.random() * 2); // 0 or 1
+        console.log('Random starting player selected:', randomStartingPlayer);
+        
+        const gameState = {
+            currentRound: 1,
+            currentDeal: 1,
+            currentPlayer: randomStartingPlayer,
+            deck: createShuffledDeck(),
+            tableCards: [],
+            playerHands: {},
+            capturedCards: {},
+            scores: {},
+            lastCapturer: null,
+            lastAction: null
+        };
+        
+        console.log('Getting room document...');
+        const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
+        const roomDoc = await window.getDoc(roomRef);
+        const roomData = roomDoc.data();
+        const playerIds = Object.keys(roomData.players);
+        
+        console.log('Player IDs:', playerIds);
+        console.log('Room created by:', roomData.createdBy);
+        
+        // Initialize player-specific data
+        playerIds.forEach((playerId, index) => {
+            gameState.playerHands[playerId] = [];
+            gameState.capturedCards[playerId] = [];
+            gameState.scores[playerId] = 0;
+        });
+        
+        console.log('Dealing initial cards...');
+        // Deal initial cards
+        dealInitialCardsOnline(gameState, playerIds);
+        
+        console.log('Updating room to active status...');
+        await window.updateDoc(roomRef, {
+            status: 'active',
+            gameState: gameState
+        });
+        
+        console.log('Game started successfully!');
+        
+    } catch (error) {
+        console.error('Error starting game:', error);
+        console.error('Error details:', error.message);
+    }
+}
+
+// createShuffledDeck function moved to top of file
+
+function dealInitialCardsOnline(gameState, playerIds) {
+    // Deal 4 table cards first (no Jacks allowed)
+    for (let i = 0; i < 4; i++) {
+        let card = gameState.deck.pop();
+        while (card && card.value === 'J') {
+            gameState.deck.push(card);
+            // Reshuffle deck
+            for (let j = gameState.deck.length - 1; j > 0; j--) {
+                const k = Math.floor(Math.random() * (j + 1));
+                [gameState.deck[j], gameState.deck[k]] = [gameState.deck[k], gameState.deck[j]];
+            }
+            card = gameState.deck.pop();
+        }
+        if (card) {
+            gameState.tableCards.push(card);
+        }
+    }
+    
+    // Deal 4 cards to each player
+    playerIds.forEach(playerId => {
+        for (let i = 0; i < 4; i++) {
+            const card = gameState.deck.pop();
+            if (card) {
+                gameState.playerHands[playerId].push(card);
+            }
+        }
+    });
+}
+
+function startOnlineGame(roomData) {
+    // Hide dashboard and show game area
+    document.getElementById('user-dashboard').style.display = 'none';
+    
+    // Set up online game mode
+    window.currentGameMode = 'online';
+    window.isOnlineGame = true;
+    window.onlineGameRoom = roomData;
+    
+    // Initialize local game state from server
+    const gameState = roomData.gameState;
+    const playerIds = Object.keys(roomData.players);
+    const currentPlayerId = currentUser.uid;
+    const opponentId = playerIds.find(id => id !== currentPlayerId);
+    
+    // Set opponent data for UI display
+    window.opponentData = roomData.players[opponentId] || null;
+    
+    // Map server state to local game variables
+    currentRound = gameState.currentRound;
+    currentDeal = gameState.currentDeal;
+    
+    // Determine if current user is player 0 or 1
+    const playerIndex = playerIds.indexOf(currentPlayerId);
+    currentPlayer = gameState.currentPlayer;
+    
+    console.log('=== GAME INITIALIZATION DEBUG ===');
+    console.log('Player IDs from room:', playerIds);
+    console.log('Current user ID:', currentPlayerId);
+    console.log('My player index:', playerIndex);
+    console.log('Game state currentPlayer:', gameState.currentPlayer);
+    console.log('Local currentPlayer set to:', currentPlayer);
+    
+    // Set up hands
+    playerHand = gameState.playerHands[currentPlayerId] || [];
+    opponentHand = gameState.playerHands[opponentId] || [];
+    tableCards = gameState.tableCards || [];
+    playerCapturedCards = gameState.capturedCards[currentPlayerId] || [];
+    opponentCapturedCards = gameState.capturedCards[opponentId] || [];
+    
+    // Set up scores
+    gameScore = {
+        player: gameState.scores[currentPlayerId] || 0,
+        opponent: gameState.scores[opponentId] || 0
+    };
+    
+    lastCapturer = gameState.lastCapturer;
+    lastAction = gameState.lastAction;
+    
+             // Show game area and start
+    showGameArea();
+    createGameUI(); // Create the game UI for online games
+    createAndAnimateCards();
+    
+    // Update UI and card visuals for online game
+    updateGameUI();
+    updateCardVisuals();
+    updatePlayerAvatarInGameUI();
+    updateOpponentAvatarInGameUI();
+     
+     // Listen for game state changes
+     listenToGameStateChanges();
+     
+     console.log('Online game started with state:', gameState);
+}
+
+function listenToGameStateChanges() {
+    if (!currentGameRoom || !window.db) return;
+    
+    const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
+    
+    window.onSnapshot(roomRef, (doc) => {
+        if (doc.exists()) {
+            const roomData = doc.data();
+            
+            if (roomData.status === 'active' && roomData.gameState) {
+                handleGameStateUpdate(roomData.gameState);
+            } else if (roomData.status === 'finished') {
+                handleOnlineGameEnd(roomData);
+            }
+        }
+    }, (error) => {
+        console.error('Error listening to game state:', error);
+    });
+}
+
+function handleGameStateUpdate(newGameState) {
+    if (!window.isOnlineGame) return;
+    
+    console.log('=== HANDLE GAME STATE UPDATE CALLED ===');
+    console.log('Current playerHand before update:', playerHand.length, 'cards');
+    console.log('New game state playerHands:', newGameState.playerHands);
+    console.log('Stack trace for game state update:');
+    console.trace();
+    
+    const playerIds = Object.keys(window.onlineGameRoom.players);
+    const currentPlayerId = currentUser.uid;
+    const opponentId = playerIds.find(id => id !== currentPlayerId);
+    
+    // Update local game state from server
+    const oldCurrentPlayer = currentPlayer;
+    currentPlayer = newGameState.currentPlayer;
+    
+    // Update hands and table
+    const newPlayerHand = newGameState.playerHands[currentPlayerId] || [];
+    const newOpponentHand = newGameState.playerHands[opponentId] || [];
+    const newTableCards = newGameState.tableCards || [];
+    
+    console.log('About to update playerHand from', playerHand.length, 'to', newPlayerHand.length);
+    
+    playerHand = newPlayerHand;
+    opponentHand = newOpponentHand;
+    tableCards = newTableCards;
+    playerCapturedCards = newGameState.capturedCards[currentPlayerId] || [];
+    opponentCapturedCards = newGameState.capturedCards[opponentId] || [];
+    
+    // Update scores
+    gameScore = {
+        player: newGameState.scores[currentPlayerId] || 0,
+        opponent: newGameState.scores[opponentId] || 0
+    };
+    
+    lastCapturer = newGameState.lastCapturer;
+    lastAction = newGameState.lastAction;
+    currentRound = newGameState.currentRound;
+    currentDeal = newGameState.currentDeal;
+    
+    // Check if we need to deal new cards
+    if (playerHand.length === 0 && opponentHand.length === 0 && newGameState.currentDeal <= 6) {
+        // Both hands empty, need new deal
+        if (isHost && newGameState.currentDeal < 6) {
+            dealNewHandOnline();
+        } else if (newGameState.currentDeal >= 6) {
+            // Round over
+            endRoundOnline();
+        }
+    }
+    
+    // Update visuals
+    updateGameDisplay();
+    createAndAnimateCards();
+    updateGameUI();
+    updateCardVisuals();
+    
+    // Check for game end
+    if (gameScore.player >= 16 || gameScore.opponent >= 16) {
+        endOnlineGame();
+    }
+    
+    console.log('Game state updated from server:', newGameState);
+}
+
+async function dealNewHandOnline() {
+    if (!isHost || !currentGameRoom) return;
+    
+    try {
+        const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
+        const roomDoc = await window.getDoc(roomRef);
+        
+        if (roomDoc.exists()) {
+            const roomData = roomDoc.data();
+            const gameState = roomData.gameState;
+            const playerIds = Object.keys(roomData.players);
+            
+            // Deal 4 new cards to each player
+            playerIds.forEach(playerId => {
+                for (let i = 0; i < 4; i++) {
+                    const card = gameState.deck.pop();
+                    if (card) {
+                        gameState.playerHands[playerId].push(card);
+                    }
+                }
+            });
+            
+            gameState.currentDeal++;
+            
+            await window.updateDoc(roomRef, {
+                gameState: gameState
+            });
+        }
+    } catch (error) {
+        console.error('Error dealing new hand online:', error);
+    }
+}
+
+async function endRoundOnline() {
+    if (!isHost || !currentGameRoom) return;
+    
+    try {
+        const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
+        const roomDoc = await window.getDoc(roomRef);
+        
+        if (roomDoc.exists()) {
+            const roomData = roomDoc.data();
+            const gameState = roomData.gameState;
+            const playerIds = Object.keys(roomData.players);
+            
+            // Any remaining table cards go to last capturer
+            if (gameState.tableCards.length > 0 && gameState.lastCapturer !== null) {
+                const lastCapturerId = playerIds[gameState.lastCapturer];
+                gameState.capturedCards[lastCapturerId].push(...gameState.tableCards);
+                gameState.tableCards = [];
+            }
+            
+            // Calculate round scores
+            calculateRoundScoreOnline(gameState, playerIds);
+            
+            // Check if game is over
+            const maxScore = Math.max(...Object.values(gameState.scores));
+            if (maxScore >= 16) {
+                // Game over
+                const winnerId = Object.keys(gameState.scores).find(
+                    playerId => gameState.scores[playerId] === maxScore
+                );
+                
+                await window.updateDoc(roomRef, {
+                    status: 'finished',
+                    winner: winnerId,
+                    finishedAt: new Date(),
+                    gameState: gameState
+                });
+            } else {
+                // Start new round
+                gameState.currentRound++;
+                gameState.currentDeal = 1;
+                gameState.currentPlayer = 0;
+                
+                // Reset captured cards
+                playerIds.forEach(playerId => {
+                    gameState.capturedCards[playerId] = [];
+                });
+                
+                // Create new deck and deal
+                gameState.deck = createShuffledDeck();
+                dealInitialCardsOnline(gameState, playerIds);
+                
+                await window.updateDoc(roomRef, {
+                    gameState: gameState
+                });
+            }
+        }
+    } catch (error) {
+        console.error('Error ending round online:', error);
+    }
+}
+
+function calculateRoundScoreOnline(gameState, playerIds) {
+    playerIds.forEach(playerId => {
+        const capturedCards = gameState.capturedCards[playerId];
+        const cardCount = capturedCards.length;
+        
+        // Most cards (2 points, or 1 each if tied)
+        const otherPlayerIds = playerIds.filter(id => id !== playerId);
+        const otherCounts = otherPlayerIds.map(id => gameState.capturedCards[id].length);
+        const maxOtherCount = Math.max(...otherCounts);
+        
+        if (cardCount > maxOtherCount) {
+            gameState.scores[playerId] += 2;
+        } else if (cardCount === maxOtherCount) {
+            gameState.scores[playerId] += 1;
+        }
+        
+        // Most clubs (1 point)
+        const clubCount = capturedCards.filter(card => card.suit === '♣').length;
+        const otherClubCounts = otherPlayerIds.map(id => 
+            gameState.capturedCards[id].filter(card => card.suit === '♣').length
+        );
+        const maxOtherClubCount = Math.max(...otherClubCounts);
+        
+        if (clubCount > maxOtherClubCount) {
+            gameState.scores[playerId] += 1;
+        }
+        
+        // Special cards
+        const hasTwo = capturedCards.some(card => card.suit === '♣' && card.value === '2');
+        const hasTen = capturedCards.some(card => card.suit === '♦' && card.value === '10');
+        const hasAce = capturedCards.some(card => card.suit === '♠' && card.value === 'A');
+        
+        if (hasTwo) gameState.scores[playerId] += 1;
+        if (hasTen) gameState.scores[playerId] += 2;
+        if (hasAce) gameState.scores[playerId] += 1;
+    });
+}
+
+async function endOnlineGame() {
+    if (!isHost || !currentGameRoom) return;
+    
+    try {
+        const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
+        const roomDoc = await window.getDoc(roomRef);
+        
+        if (roomDoc.exists()) {
+            const roomData = roomDoc.data();
+            const gameState = roomData.gameState;
+            
+            const winnerId = Object.keys(gameState.scores).find(
+                playerId => gameState.scores[playerId] >= 16
+            );
+            
+            await window.updateDoc(roomRef, {
+                status: 'finished',
+                winner: winnerId,
+                finishedAt: new Date()
+            });
+        }
+    } catch (error) {
+        console.error('Error ending online game:', error);
+    }
+}
+
+async function cancelMatchmaking() {
+    try {
+        if (currentGameRoom && isHost) {
+            // Delete the game room if we're the host
+            await window.deleteDoc(window.doc(window.db, 'gameRooms', currentGameRoom));
+        }
+        
+        if (gameRoomListener) {
+            gameRoomListener();
+            gameRoomListener = null;
+        }
+        
+        currentGameRoom = null;
+        isHost = false;
+        
+        hideMatchmakingScreen();
+        
+        // Refund coins
+        await addCoins(1000);
+        showGameEndMessage('Matchmaking cancelled. Coins refunded.', 'info');
+        
+    } catch (error) {
+        console.error('Error cancelling matchmaking:', error);
+        hideMatchmakingScreen();
+    }
+}
+
+function handleGameRoomDeleted() {
+    if (gameRoomListener) {
+        gameRoomListener();
+        gameRoomListener = null;
+    }
+    
+    currentGameRoom = null;
+    isHost = false;
+    
+    hideMatchmakingScreen();
+    hideGameReadyScreen();
+    
+    showGameEndMessage('Game room was closed. Returning to dashboard.', 'info');
+    showUserDashboard();
+}
+
+function handleOnlineGameEnd(roomData) {
+    const winner = roomData.winner;
+    const isWinner = winner === currentUser.uid;
+    
+    // Handle rewards
+    if (isWinner) {
+        window.pendingCoinReward = 3000;
+        addCoins(3000);
+    }
+    
+    // Update stats
+    updateUserStats(isWinner);
+    
+    // Show winning popup
+    showOnlineGameEndPopup(isWinner, roomData);
+    
+    // Clean up
+    if (gameRoomListener) {
+        gameRoomListener();
+        gameRoomListener = null;
+    }
+    
+    currentGameRoom = null;
+    isHost = false;
+    window.isOnlineGame = false;
+}
+
+function showOnlineGameEndPopup(isWinner, roomData) {
+    const popup = document.createElement('div');
+    popup.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10000;
+        font-family: 'Inter', sans-serif;
+    `;
+    
+    const players = Object.values(roomData.players);
+    const winner = players.find(p => p.userId === roomData.winner);
+    
+    popup.innerHTML = `
+        <div style="
+            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 400px;
+            text-align: center;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        ">
+            <div style="font-size: 4rem; margin-bottom: 20px;">
+                ${isWinner ? '🏆' : '😔'}
+            </div>
+            <h2 style="color: white; font-size: 2rem; margin-bottom: 15px; font-weight: 700;">
+                ${isWinner ? 'You Win!' : 'You Lost'}
+            </h2>
+            <p style="color: rgba(255, 255, 255, 0.8); margin-bottom: 20px; font-size: 1.1rem;">
+                ${winner ? `${winner.username} won the game!` : 'Game completed'}
+            </p>
+            ${isWinner ? `
+                <div style="color: #10b981; font-size: 1.2rem; font-weight: 600; margin-bottom: 30px;">
+                    +3000 coins earned!
+                </div>
+            ` : ''}
+            <button id="return-dashboard" style="
+                background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+                color: white;
+                border: none;
+                border-radius: 12px;
+                padding: 15px 30px;
+                font-size: 1.1rem;
+                font-weight: 600;
+                cursor: pointer;
+                transition: all 0.3s ease;
+            ">Return to Dashboard</button>
+        </div>
+    `;
+    
+    document.body.appendChild(popup);
+    
+    document.getElementById('return-dashboard').addEventListener('click', () => {
+        popup.remove();
+        showUserDashboard();
+    });
+    
+    // Auto-return after 10 seconds
+    setTimeout(() => {
+        if (popup.parentNode) {
+            popup.remove();
+            showUserDashboard();
+        }
+    }, 10000);
+}
+
+// Online game cleanup and disconnection handling
+window.addEventListener('beforeunload', () => {
+    if (currentGameRoom && window.isOnlineGame) {
+        // Clean up game room on page unload
+        cleanupOnlineGame();
+    }
+});
+
+async function cleanupOnlineGame() {
+    if (!currentGameRoom) return;
+    
+    try {
+        if (gameRoomListener) {
+            gameRoomListener();
+            gameRoomListener = null;
+        }
+        
+        // If we're the host and game hasn't started, delete the room
+        if (isHost && window.onlineGameRoom?.status === 'waiting') {
+            await window.deleteDoc(window.doc(window.db, 'gameRooms', currentGameRoom));
+        }
+        
+        currentGameRoom = null;
+        isHost = false;
+        window.isOnlineGame = false;
+        window.opponentData = null; // Clear opponent data
+        
+    } catch (error) {
+        console.error('Error cleaning up online game:', error);
+    }
 }
 
 // This function is now moved inside DOMContentLoaded event listener
@@ -1056,6 +3441,13 @@ function handleGameRewards(playerWon) {
             // Removed popup - animation will show on dashboard instead
         }
         // No popup messages - keep winning screen clean
+    } else if (currentUser && window.currentGameMode === 'online') {
+        if (playerWon) {
+            // Store the reward to show animation when returning to dashboard
+            window.pendingCoinReward = 3000;
+            addCoins(3000); // Add coins to database immediately
+        }
+        // Online game rewards are handled by the multiplayer system
     }
     
     // Update user stats
@@ -1300,8 +3692,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // Card deck setup - SINGLE PERSISTENT DECK
     const suits = ['♠', '♥', '♦', '♣'];
     const values = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-    let deck = [];
-    let originalDeck = []; // Keep track of original deck for verification
     
     // Initialize deck ONCE at game start
     function createDeck() {
@@ -1323,12 +3713,7 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log(`Created deck with ${deck.length} cards`);
     }
     
-    // Get numeric value for sum calculations
-    function getCardNumericValue(value) {
-        if (value === 'A') return 1;
-        if (['J', 'Q', 'K'].includes(value)) return 0; // Face cards can't be used in sums
-        return parseInt(value);
-    }
+    // Get numeric value for sum calculations - moved to top of file
     
     // Shuffle deck
     function shuffleDeck() {
@@ -1428,42 +3813,417 @@ document.addEventListener('DOMContentLoaded', function() {
         gameArea.style.display = 'none';
     }
     
-    function showGameArea() {
-    console.log('=== SHOW GAME AREA CALLED ===');
-    console.log('Setting display styles...');
+    // showGameArea function moved to top of file
+
+window.executeAction = function(action) {
+    console.log('=== EXECUTE ACTION CALLED ===');
+    console.log('Action:', action);
+    console.log('Selected player card:', selectedPlayerCard);
+    console.log('Call stack trace:');
+    console.trace();
     
-    // Hide all other screens
-    const authScreen = document.getElementById('auth-screen');
-    const userDashboard = document.getElementById('user-dashboard');
-    const winningScreen = document.getElementById('winning-screen');
-    const loadingScreen = document.getElementById('loading-screen');
-    
-    if (authScreen) authScreen.style.setProperty('display', 'none', 'important');
-    if (userDashboard) userDashboard.style.setProperty('display', 'none', 'important');
-    if (mainMenu) mainMenu.style.setProperty('display', 'none', 'important');
-    if (difficultyMenu) difficultyMenu.style.setProperty('display', 'none', 'important');
-    if (loadingScreen) loadingScreen.style.setProperty('display', 'none', 'important');
-    if (winningScreen) winningScreen.style.setProperty('display', 'none', 'important');
-    
-    // Show game area
-    if (gameArea) {
-        gameArea.style.setProperty('display', 'flex', 'important');
-        gameArea.style.setProperty('visibility', 'visible', 'important');
-        gameArea.style.setProperty('opacity', '1', 'important');
+    if (selectedPlayerCard === null) {
+        console.log('No card selected for action:', action);
+        return;
     }
     
-    // Prevent scrolling on mobile during game
-    if (window.innerWidth <= 768) {
-        document.body.classList.add('game-active');
+    console.log('DEBUG executeAction - playerHand:', playerHand);
+    console.log('DEBUG executeAction - selectedPlayerCard index:', selectedPlayerCard);
+    console.log('DEBUG executeAction - playerHand length:', playerHand.length);
+    
+    const playedCard = window.playerHand[selectedPlayerCard];
+    if (!playedCard) {
+        console.log('No card found at selected index:', selectedPlayerCard);
+        console.log('Available indices in playerHand:', Object.keys(window.playerHand));
+        return;
+    }
+    console.log(`Executing ${action} with card:`, playedCard.value + playedCard.suit);
+    
+    // For online games, sync to Firebase first and wait for update
+    if (window.isOnlineGame) {
+        // Determine action type for online games
+        let actionType;
+        if (selectedTableCards.length > 0) {
+            // Validate capture - check for valid capture types
+            console.log('DEBUG: selectedTableCards indices:', selectedTableCards);
+            console.log('DEBUG: tableCards array:', window.tableCards);
+            console.log('DEBUG: tableCards length:', window.tableCards.length);
+            
+            const tableCardsToCapture = selectedTableCards.map(index => {
+                console.log(`DEBUG: Getting card at index ${index}:`, window.tableCards[index]);
+                return window.tableCards[index];
+            }).filter(card => card); // Filter out undefined cards
+            
+            console.log('DEBUG: tableCardsToCapture after filter:', tableCardsToCapture);
+            
+            if (tableCardsToCapture.length === 0) {
+                console.log('Invalid capture: no valid table cards found');
+                return;
+            }
+            
+            let isValidCapture = false;
+            
+            // Check for Jack capture (captures all table cards)
+            if (playedCard.value === 'J') {
+                isValidCapture = true;
+            } else {
+                // Check for exact rank matches
+                const hasExactMatch = tableCardsToCapture.some(tableCard => tableCard && tableCard.value === playedCard.value);
+                
+                // Check for sum capture (only for number cards)
+                let hasSumMatch = false;
+                if (playedCard.numericValue > 0) {
+                    const totalValue = tableCardsToCapture.reduce((sum, card) => sum + (card ? card.numericValue : 0), 0);
+                    hasSumMatch = (totalValue === playedCard.numericValue);
+                }
+                
+                isValidCapture = hasExactMatch || hasSumMatch;
+            }
+            
+            if (isValidCapture) {
+                actionType = 'capture';
+            } else {
+                console.log('Invalid capture: no valid capture type found');
+                return;
+            }
+        } else {
+            actionType = 'lay';
+        }
+        
+        syncMoveToFirebase(actionType, playedCard, selectedTableCards);
+        return; // Don't execute locally, wait for Firebase update
     }
     
-    // Update player info in game area
-    updatePlayerInfoInGame();
-    
-    console.log('Game area display set to flex');
-    console.log('All screen elements checked and forced');
-    console.log('Game area final display:', gameArea ? gameArea.style.display : 'gameArea not found');
+    // Execute locally for single player games (original working logic)
+    if (action === 'capture') {
+        console.log('Taking CAPTURE branch');
+        lastAction = 'capture'; // Track that this was a capture
+        
+        // Execute capture with throwing animation
+        const capturedCards = selectedTableCards.map(index => window.tableCards[index]);
+        capturedCards.push(playedCard); // Add played card to captured pile
+        
+        // Show player throwing card to center and capturing
+        showPlayerCaptureMove(selectedPlayerCard, selectedTableCards, () => {
+            console.log('Capture animation complete, executing capture logic...');
+            playerCapturedCards.push(...capturedCards);
+            lastCapturer = 0; // Player is the last capturer
+            
+            // Remove captured cards from table
+            selectedTableCards.sort((a, b) => b - a); // Sort descending to remove from end first
+            selectedTableCards.forEach(index => {
+                window.tableCards.splice(index, 1);
+            });
+            
+            // Remove played card from hand
+            window.playerHand.splice(selectedPlayerCard, 1);
+            
+            console.log(`Player captured: ${capturedCards.map(c => c.value + c.suit).join(', ')}`);
+            
+            // Clear selections and continue
+            finishAction();
+        });
+    } else if (action === 'lay') {
+        console.log('Taking LAY branch');
+        lastAction = 'lay'; // Track that this was a lay
+        
+        // Show player throwing card to center and laying
+        showPlayerLayMove(selectedPlayerCard, () => {
+            console.log('Lay animation complete, executing lay logic...');
+            window.tableCards.push(playedCard);
+            window.playerHand.splice(selectedPlayerCard, 1);
+            
+            console.log(`Player laid: ${playedCard.value}${playedCard.suit}`);
+            
+            // Clear selections and continue
+            finishAction();
+        });
+    } else {
+        console.log('Unknown action:', action);
     }
+};
+
+// executeLocalAction function removed - logic now directly in executeAction for better single/multiplayer handling
+
+async function syncMoveToFirebase(action, playedCard, tableCardsSelected) {
+    if (!currentGameRoom || !window.db) return;
+    
+    try {
+        const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
+        const roomDoc = await window.getDoc(roomRef);
+        
+        if (!roomDoc.exists()) return;
+        
+        const roomData = roomDoc.data();
+        const gameState = roomData.gameState;
+        const currentPlayerId = currentUser.uid;
+        
+        // Create updated game state
+        const updatedGameState = { ...gameState };
+        
+        if (action === 'capture') {
+            // Handle capture
+            const capturedCards = tableCardsSelected.map(index => gameState.tableCards[index]);
+            
+            // Add to captured cards
+            if (!updatedGameState.capturedCards[currentPlayerId]) {
+                updatedGameState.capturedCards[currentPlayerId] = [];
+            }
+            updatedGameState.capturedCards[currentPlayerId].push(playedCard, ...capturedCards);
+            
+            // Remove from player hand by finding the exact card, not by index
+            const playerHandArray = updatedGameState.playerHands[currentPlayerId];
+            const cardIndex = playerHandArray.findIndex(card => 
+                card.suit === playedCard.suit && card.value === playedCard.value
+            );
+            if (cardIndex !== -1) {
+                playerHandArray.splice(cardIndex, 1);
+            } else {
+                console.warn('Could not find played card in hand:', playedCard);
+            }
+            
+            // Remove from table (in reverse order)
+            const sortedIndices = [...tableCardsSelected].sort((a, b) => b - a);
+            sortedIndices.forEach(index => {
+                updatedGameState.tableCards.splice(index, 1);
+            });
+            
+            updatedGameState.lastCapturer = currentPlayerId;
+            updatedGameState.lastAction = 'capture';
+            
+        } else {
+            // Handle lay
+            updatedGameState.tableCards.push(playedCard);
+            
+            // Remove from player hand by finding the exact card, not by index
+            const playerHandArray = updatedGameState.playerHands[currentPlayerId];
+            const cardIndex = playerHandArray.findIndex(card => 
+                card.suit === playedCard.suit && card.value === playedCard.value
+            );
+            if (cardIndex !== -1) {
+                playerHandArray.splice(cardIndex, 1);
+            } else {
+                console.warn('Could not find played card in hand:', playedCard);
+            }
+            
+            updatedGameState.lastAction = 'lay';
+        }
+        
+        // Switch turn
+        const playerIds = Object.keys(roomData.players);
+        const currentIndex = playerIds.indexOf(currentPlayerId);
+        const nextIndex = (currentIndex + 1) % playerIds.length;
+        updatedGameState.currentPlayer = nextIndex;
+        
+        // Update scores if needed
+        // (Score calculation would happen here)
+        
+        // Update in Firebase
+        await window.updateDoc(roomRef, {
+            gameState: updatedGameState
+        });
+        
+        console.log('Move synced to Firebase:', action, 'Card:', playedCard.value + playedCard.suit);
+        
+    } catch (error) {
+        console.error('Error syncing move to Firebase:', error);
+    }
+}
+
+function finishAction() {
+    // Clear selections
+    selectedPlayerCard = null;
+    selectedTableCards = [];
+    
+    console.log('=== FINISH ACTION CALLED ===');
+    console.log('About to call updateGameDisplay...');
+    
+    // Update visuals
+    updateGameDisplay();
+    
+    console.log('About to call nextTurn...');
+    console.log('Current player before nextTurn:', currentPlayer);
+    
+    // For online games, don't call nextTurn here - it will be handled by Firebase listener
+    if (!window.isOnlineGame) {
+        // Next turn
+        nextTurn();
+    }
+}
+
+function findSumCombinations(tableCards, targetSum) {
+    const combinations = [];
+    
+    // Generate all possible combinations
+    for (let i = 1; i < (1 << tableCards.length); i++) {
+        const combination = [];
+        let sum = 0;
+        
+        for (let j = 0; j < tableCards.length; j++) {
+            if (i & (1 << j)) {
+                combination.push(j);
+                sum += tableCards[j].numericValue;
+            }
+        }
+        
+        if (sum === targetSum && combination.length > 1) {
+            combinations.push(combination);
+        }
+    }
+    
+    return combinations;
+}
+
+function animateCapture(playerCardIndex, tableCardIndices, callback) {
+    const playerCardElement = document.querySelectorAll('#player-cards .card')[playerCardIndex];
+    const tableCardElements = tableCardIndices.map(index => 
+        document.querySelectorAll('#table-cards .card')[index]
+    ).filter(element => element !== null && element !== undefined);
+    
+    // Safety check - if no player card element, just execute callback
+    if (!playerCardElement) {
+        console.log('No player card element found, skipping animation');
+        callback();
+        return;
+    }
+    
+    // Additional safety checks for DOM properties
+    if (playerCardElement.offsetLeft === undefined || playerCardElement.offsetWidth === undefined) {
+        console.log('Player card element missing offset properties, skipping animation');
+        callback();
+        return;
+    }
+    
+    // Get center position for dramatic capture effect
+    const centerArea = document.querySelector('.center-area');
+    if (!centerArea) {
+        console.log('Center area not found, skipping animation');
+        callback();
+        return;
+    }
+    
+    const centerRect = centerArea.getBoundingClientRect();
+    const gameAreaRect = document.getElementById('game-area').getBoundingClientRect();
+    
+    const centerX = (centerRect.left - gameAreaRect.left) + centerRect.width / 2;
+    const centerY = (centerRect.top - gameAreaRect.top) + centerRect.height / 2;
+    
+    // Create capture animation timeline with error handling
+    try {
+        const captureTimeline = gsap.timeline({
+            onComplete: callback
+        });
+        
+        // Step 1: Player card flies to center with dramatic entrance
+        captureTimeline.to(playerCardElement, {
+            duration: 0.4,
+            x: centerX - playerCardElement.offsetLeft - playerCardElement.offsetWidth / 2,
+            y: centerY - playerCardElement.offsetTop - playerCardElement.offsetHeight / 2,
+            scale: 1.3,
+            rotation: 0,
+            zIndex: 999,
+            ease: "power2.out",
+            transformOrigin: "center"
+        });
+        
+        // Step 2: Add dramatic glow effect to player card
+        captureTimeline.set(playerCardElement, {
+            boxShadow: '0 0 40px rgba(59, 130, 246, 0.8), 0 0 80px rgba(59, 130, 246, 0.4)'
+        }, 0.2);
+        
+        // Step 3: Table cards fly to center in sequence
+        tableCardElements.forEach((element, index) => {
+            if (element && element.offsetLeft !== undefined && element.offsetTop !== undefined) {
+                captureTimeline.to(element, {
+                    duration: 0.3,
+                    x: centerX - element.offsetLeft - element.offsetWidth / 2 + index * 5,
+                    y: centerY - element.offsetTop - element.offsetHeight / 2 + index * 5,
+                    scale: 1.2,
+                    rotation: (Math.random() - 0.5) * 30,
+                    zIndex: 998 - index,
+                    ease: "power2.out"
+                }, 0.1 + index * 0.05);
+            }
+        });
+        
+        // Step 4: All cards disappear with spiral effect
+        const allCardsToAnimate = [playerCardElement, ...tableCardElements].filter(el => el);
+        if (allCardsToAnimate.length > 0) {
+            captureTimeline.to(allCardsToAnimate, {
+                duration: 0.4,
+                x: '+=50',
+                y: '+=100',
+                rotation: '+=360',
+                scale: 0.3,
+                opacity: 0,
+                ease: "power2.in",
+                stagger: 0.03
+            }, 1.0);
+        }
+        
+    } catch (error) {
+        console.error('Animation error in animateCapture:', error);
+        callback(); // Still call callback to continue game flow
+    }
+}
+
+
+
+function nextTurn() {
+    console.log('=== NEXT TURN CALLED ===');
+    console.log('Current player before switch:', currentPlayer);
+    console.log('Last action was:', lastAction);
+    console.log('Player hand length:', playerHand.length);
+    console.log('Opponent hand length:', opponentHand.length);
+    
+    // Check if deal is over BEFORE switching turns
+    if (playerHand.length === 0 && opponentHand.length === 0) {
+        if (currentDeal < 6) {
+            // Deal new cards (deals 2-6)
+            currentDeal++;
+            dealNewHand();
+            return; // Exit early, don't change turns
+        } else {
+            // All 6 deals complete - round is over
+            endRound();
+            return; // Exit early
+        }
+    }
+    
+    // KONCHINA RULE: Turn switches after EVERY action (both capture and lay)
+    currentPlayer = (currentPlayer + 1) % 2;
+    console.log(`=== TURN SWITCH (after ${lastAction.toUpperCase()}): Now player ${currentPlayer} (${currentPlayer === 0 ? 'Human' : 'AI'}) ===`);
+    
+    updateGameUI();
+    
+    if (currentPlayer === 0) {
+        // Player's turn
+        console.log('Player turn - enabling card selection');
+        updateCardVisuals();
+    } else {
+        // AI turn - execute with short delay for better UX
+        console.log('AI turn - executing AI move');
+        updateCardVisuals(); // Gray out player cards during AI turn
+        setTimeout(() => {
+            executeAITurn();
+        }, 500);
+    }
+}
+
+// Placeholder functions that may be called
+function dealNewHand() {
+    console.log('dealNewHand called - placeholder');
+}
+
+function endRound() {
+    console.log('endRound called - placeholder');
+}
+
+function executeAITurn() {
+    console.log('executeAITurn called - placeholder');
+}
+ 
+// Duplicate createAndAnimateCards function removed - now defined at top of file
 
     // Game flow functions - SIMPLIFIED (no longer used)
     function selectPlayerCount(count) {
@@ -1609,6 +4369,9 @@ document.addEventListener('DOMContentLoaded', function() {
         lastCapturer = 0;
         gameScore = { player: 0, opponent: 0 };
         
+        // Create the game UI
+        createGameUI();
+        
         console.log('=== KONCHINA GAME INITIALIZED ===');
         console.log('1v1 gameplay with single persistent 52-card deck');
         console.log('Selected difficulty:', selectedDifficulty);
@@ -1682,200 +4445,8 @@ document.addEventListener('DOMContentLoaded', function() {
         createAndAnimateCards();
     }
     
-    function createAndAnimateCards() {
-        const playerCardsContainer = document.getElementById('player-cards');
-        const opponentCardsContainer = document.getElementById('opponent-cards');
-        const tableCardsDiv = document.getElementById('table-cards');
-        
-        // Clear containers first to prevent duplicate cards
-        playerCardsContainer.innerHTML = '';
-        opponentCardsContainer.innerHTML = '';
-        tableCardsDiv.innerHTML = '';
-        
-        const playerCardElements = [];
-        const opponentCardElements = [];
-        const tableCardElements = [];
-        
-        // Create player cards (face up) - start from deck position
-        playerHand.forEach((card, i) => {
-            const cardElement = createCardElement(card, true, i, playerHand.length);
-            cardElement.style.opacity = '0';
-            cardElement.style.transform = 'translate(-50px, -200px) rotate(0deg) scale(0.8)';
-            cardElement.addEventListener('click', () => playCard(i));
-            playerCardsContainer.appendChild(cardElement);
-            playerCardElements.push(cardElement);
-        });
-        
-        // Create opponent cards (face down) - start from deck position
-        opponentHand.forEach((card, i) => {
-            const cardElement = createCardElement(null, false, i, opponentHand.length);
-            cardElement.style.opacity = '0';
-            cardElement.style.transform = 'translate(-50px, 200px) rotate(0deg) scale(0.8)';
-            opponentCardsContainer.appendChild(cardElement);
-            opponentCardElements.push(cardElement);
-        });
-        
-        // Create table cards (face up) - start from deck position
-        tableCards.forEach((card, i) => {
-            const cardElement = createCardElement(card, true, i, tableCards.length);
-            cardElement.style.opacity = '0';
-            cardElement.style.transform = 'translate(-50px, 0px) rotate(0deg) scale(0.8)';
-            cardElement.classList.add('table-card');
-            cardElement.addEventListener('click', () => selectTableCard(i));
-            tableCardsDiv.appendChild(cardElement);
-            tableCardElements.push(cardElement);
-        });
-        
-        // SIMPLIFIED ANIMATION - No complex GSAP timeline to avoid errors
-        try {
-            console.log('Starting simplified card dealing animation...');
-            
-            // Animate player cards - faster
-            playerCardElements.forEach((card, index) => {
-                setTimeout(() => {
-                    if (card && card.parentNode) {
-                        gsap.to(card, {
-                            duration: 0.15, // Much faster
-                            opacity: 1,
-                            x: 0,
-                            y: 0,
-                            rotation: 0,
-                            scale: 1,
-                            ease: "power2.out"
-                        });
-                    }
-                }, index * 25); // Shorter delay
-            });
-            
-            // Animate opponent cards - faster
-            opponentCardElements.forEach((card, index) => {
-                setTimeout(() => {
-                    if (card && card.parentNode) {
-                        gsap.to(card, {
-                            duration: 0.15, // Much faster
-                            opacity: 1,
-                            x: 0,
-                            y: 0,
-                            rotation: 0,
-                            scale: 1,
-                            ease: "power2.out"
-                        });
-                    }
-                }, (index + playerCardElements.length) * 25); // Shorter delay
-            });
-            
-            // Animate table cards - faster
-            tableCardElements.forEach((card, index) => {
-                setTimeout(() => {
-                    if (card && card.parentNode) {
-                        gsap.to(card, {
-                            duration: 0.15, // Much faster
-                            opacity: 1,
-                            x: 0,
-                            y: 0,
-                            rotation: 0,
-                            scale: 1,
-                            ease: "power2.out"
-                        });
-                    }
-                }, (index + playerCardElements.length + opponentCardElements.length) * 25); // Shorter delay
-            });
-            
-        } catch (error) {
-            console.error('Animation error, falling back to immediate display:', error);
-            // Fallback: Just show cards immediately
-            [...playerCardElements, ...opponentCardElements, ...tableCardElements].forEach(card => {
-                if (card) {
-                    card.style.opacity = '1';
-                    card.style.transform = 'translate(0, 0) rotate(0deg) scale(1)';
-                }
-            });
-        }
-        
-        // Position cards in hand formation
-        positionCardsInHand(playerCardElements, true);
-        positionCardsInHand(opponentCardElements, false);
-        positionTableCards(tableCardElements);
-        
-        // Update game UI after cards are positioned
-        setTimeout(() => {
-            console.log('About to call updateGameUI and updateCardVisuals...');
-            console.log('Player hand length:', playerHand.length);
-            console.log('Opponent hand length:', opponentHand.length);
-            console.log('Table cards length:', tableCards.length);
-            
-            updateGameUI();
-            updateCardVisuals();
-            
-            console.log('Checking if cards are in DOM...');
-            const playerCards = document.querySelectorAll('#player-cards .card');
-            const opponentCards = document.querySelectorAll('#opponent-cards .card');
-            const tableCardsInDOM = document.querySelectorAll('#table-cards .card');
-            console.log('Player cards in DOM:', playerCards.length);
-            console.log('Opponent cards in DOM:', opponentCards.length);
-            console.log('Table cards in DOM:', tableCardsInDOM.length);
-            
-            console.log(`=== DEAL ${currentDeal} COMPLETE ===`);
-            console.log(`Deck integrity: ${deck.length + tableCards.length + playerHand.length + opponentHand.length} = 52? ${deck.length + tableCards.length + playerHand.length + opponentHand.length === 52}`);
-        }, 2000);
-    }
-    
-    function createCardElement(card, faceUp, index, totalCards) {
-        const cardDiv = document.createElement('div');
-        cardDiv.className = 'card';
-        cardDiv.dataset.index = index;
-        
-        if (faceUp && card) {
-            // Face up card with enhanced styling and custom graphics support
-            cardDiv.classList.add('card-front');
-            
-            // Check if we have custom graphics for this card
-            const cardImagePath = getCardImagePath(card);
-            
-            if (cardImagePath) {
-                // Use custom card image
-                cardDiv.innerHTML = `
-                    <div class="card-inner custom-card">
-                        <img src="${cardImagePath}" alt="${card.value} of ${card.suit}" class="card-image" 
-                             onerror="this.parentElement.innerHTML = getCardFallbackHTML('${card.value}', '${card.suit}', '${card.color}');">
-                    </div>
-                `;
-            } else {
-                // Use original text-based design as fallback
-                cardDiv.innerHTML = getCardFallbackHTML(card.value, card.suit, card.color);
-            }
-        } else {
-            // Face down card with pattern
-            cardDiv.classList.add('card-back');
-            cardDiv.innerHTML = `
-                <div class="card-back-pattern" style="
-                    width: 100%;
-                    height: 100%;
-                    background: linear-gradient(45deg, #1e40af 25%, #3b82f6 25%, #3b82f6 50%, #1e40af 50%, #1e40af 75%, #3b82f6 75%);
-                    background-size: 8px 8px;
-                    border-radius: 8px;
-                    position: relative;
-                    overflow: hidden;
-                ">
-                    <div style="
-                        position: absolute;
-                        top: 50%;
-                        left: 50%;
-                        transform: translate(-50%, -50%);
-                        color: white;
-                        font-size: 24px;
-                        font-weight: bold;
-                        text-shadow: 0 1px 2px rgba(0,0,0,0.5);
-                    ">🂠</div>
-                </div>
-            `;
-        }
-        
-        // Add subtle entrance animation class
-        cardDiv.classList.add('card-entering');
-        
-        return cardDiv;
-    }
+    // createAndAnimateCards function moved to top of file for online multiplayer access
+    // createCardElement function moved to top of file for online multiplayer access
     
     // Image cache to prevent duplicate network requests
     const imageCache = new Map();
@@ -1934,67 +4505,8 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // Get the image path for a specific card with caching
-    function getCardImagePath(card) {
-        // Convert suit symbols to standard names
-        const suitNames = {
-            '♠': 'spades',
-            '♥': 'hearts', 
-            '♦': 'diamonds',
-            '♣': 'clubs'
-        };
-        
-        const suitName = suitNames[card.suit];
-        if (!suitName) return null;
-        
-        // Convert card values to standard names
-        let valueName = card.value.toLowerCase();
-        if (valueName === 'a') valueName = 'ace';
-        if (valueName === 'j') valueName = 'jack';
-        if (valueName === 'q') valueName = 'queen'; 
-        if (valueName === 'k') valueName = 'king';
-        
-        // Create a cache key for this specific card
-        const cacheKey = `${valueName}_of_${suitName}`;
-        
-        // Check if we already have a cached URL for this card
-        if (imageCache.has(cacheKey)) {
-            return imageCache.get(cacheKey);
-        }
-        
-        // Create new URL with timestamp only once per card type
-        const timestamp = Date.now();
-        const imageUrl = `assets/cards/${valueName}_of_${suitName}.png?v=${timestamp}`;
-        
-        // Cache this URL for future use
-        imageCache.set(cacheKey, imageUrl);
-        
-        return imageUrl;
-    }
-    
-    // Fallback HTML for when custom images aren't available
-    function getCardFallbackHTML(value, suit, color) {
-        return `
-            <div class="card-inner">
-                <div class="card-value ${color}" style="position: absolute; top: 8px; left: 8px; font-size: 24px; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">${value}</div>
-                <div class="card-suit ${color}" style="position: absolute; top: 36px; left: 8px; font-size: 22px; text-shadow: 0 1px 2px rgba(0,0,0,0.3);">${suit}</div>
-                <div class="card-center ${color}" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 48px; font-weight: bold; text-shadow: 0 2px 4px rgba(0,0,0,0.3);">${getFaceCardDisplay(value, suit)}</div>
-                <div class="card-value ${color}" style="position: absolute; bottom: 8px; right: 8px; font-size: 24px; font-weight: bold; transform: rotate(180deg); text-shadow: 0 1px 2px rgba(0,0,0,0.3);">${value}</div>
-                <div class="card-suit ${color}" style="position: absolute; bottom: 36px; right: 8px; font-size: 22px; transform: rotate(180deg); text-shadow: 0 1px 2px rgba(0,0,0,0.3);">${suit}</div>
-            </div>
-        `;
-    }
-    
-    // Get display content for face cards in fallback mode
-    function getFaceCardDisplay(value, suit) {
-        if (['J', 'Q', 'K'].includes(value)) {
-            return value; // Show J/Q/K instead of suit for face cards
-        }
-        if (value === 'A') {
-            return 'A'; // Show A for Aces
-        }
-        return suit; // Show suit for number cards
-    }
+    // getCardImagePath function moved to top of file for online multiplayer access
+    // getCardFallbackHTML function moved to top of file for online multiplayer access
     
     function getCardRotation(index, totalCards) {
         // Calculate rotation for truly stacked effect
@@ -2108,191 +4620,8 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    function positionTableCards(cards) {
-        const totalCards = cards.length;
-        if (totalCards === 0) return;
-        
-        // Responsive table card positioning
-        const screenWidth = window.innerWidth;
-        const isMobile = screenWidth < 768;
-        const isSmallMobile = screenWidth < 480;
-        
-        // Adjust table spread based on screen size - much tighter on mobile
-        let overlapAmount;
-        if (isMobile) {
-            // Very minimal spacing on mobile to keep cards close together
-            overlapAmount = totalCards > 1 ? Math.min(8, 30 / totalCards) : 0;
-        } else {
-            // Desktop maintains original spacing
-            const maxSpread = 280;
-            overlapAmount = totalCards > 1 ? Math.min(40, maxSpread / totalCards) : 0;
-        }
-        const centerOffset = (totalCards - 1) * overlapAmount / 2;
-        
-        cards.forEach((card, index) => {
-            // Position cards in a loose line with overlap
-            const x = (index * overlapAmount) - centerOffset;
-            const y = 0;
-            
-            // Store original transform values WITHOUT random offsets
-            const originalTransform = {
-                x: x,
-                y: y,
-                rotation: 0, // Keep table cards straight for cleaner look
-                scale: 1,
-                zIndex: index + 1
-            };
-            
-            // Store original transform on the element for reference
-            card._originalTransform = originalTransform;
-            
-            // Clear any existing GSAP animations first
-            gsap.killTweensOf(card);
-            
-            // Apply initial positioning using GSAP
-            gsap.set(card, {
-                x: originalTransform.x,
-                y: originalTransform.y,
-                rotation: originalTransform.rotation,
-                scale: originalTransform.scale,
-                zIndex: originalTransform.zIndex,
-                transformOrigin: "center"
-            });
-            
-            // Remove any existing event listeners to prevent duplicates
-            if (card._tableMouseEnterHandler) {
-                card.removeEventListener('mouseenter', card._tableMouseEnterHandler);
-            }
-            if (card._tableMouseLeaveHandler) {
-                card.removeEventListener('mouseleave', card._tableMouseLeaveHandler);
-            }
-            
-            // Create new event handlers that capture the current originalTransform
-            const currentOriginalTransform = { ...originalTransform };
-            
-                                                     card._tableMouseEnterHandler = () => {
-                 // Kill any existing animations before starting new one
-                 gsap.killTweensOf(card);
-                 gsap.to(card, {
-                     duration: 0.05, // Ultra fast hover response
-                     x: currentOriginalTransform.x, // Keep X position fixed
-                     y: currentOriginalTransform.y - 8, // Only move up slightly
-                     rotation: currentOriginalTransform.rotation, // Keep rotation fixed
-                     scale: currentOriginalTransform.scale, // Keep original scale - no scaling
-                     // Don't change zIndex at all
-                     ease: "power2.out"
-                 });
-                
-                // More subtle selection glow
-                card.style.boxShadow = '0 3px 12px rgba(34, 197, 94, 0.25), 0 0 0 1px rgba(34, 197, 94, 0.15)';
-            };
-            
-            card._tableMouseLeaveHandler = () => {
-                // Don't animate back if card is selected
-                if (!card.classList.contains('selected')) {
-                    // Kill any existing animations before starting new one
-                    gsap.killTweensOf(card);
-                    gsap.to(card, {
-                        duration: 0.05, // Ultra fast return
-                        x: currentOriginalTransform.x, // Return to original X position
-                        y: currentOriginalTransform.y, // Return to original Y position  
-                        rotation: currentOriginalTransform.rotation, // Return to original rotation
-                        scale: currentOriginalTransform.scale, // Return to original scale
-                        // Don't change zIndex back - keep original layering
-                        ease: "power2.out"
-                    });
-                    
-                    card.style.boxShadow = '';
-                }
-            };
-            
-            // Add the new event listeners
-            card.addEventListener('mouseenter', card._tableMouseEnterHandler);
-            card.addEventListener('mouseleave', card._tableMouseLeaveHandler);
-        });
-    }
-
     // Game logic functions
-    let selectedPlayerCard = null;
-    let selectedTableCards = [];
-    
-              function playCard(cardIndex) {
-         if (currentPlayer !== 0) return; // Not player's turn
-         if (selectedPlayerCard === cardIndex) {
-             // Deselect card
-             selectedPlayerCard = null;
-             updateCardVisuals();
-             return;
-         }
-         
-         const playedCard = playerHand[cardIndex];
-         console.log(`Selected card: ${playedCard.value}${playedCard.suit}`);
-         
-         // Set selected card
-         selectedPlayerCard = cardIndex;
-         selectedTableCards = [];
-         
-         // Auto-execute for Jack (captures all table cards)
-         if (playedCard.value === 'J' && tableCards.length > 0) {
-             selectedTableCards = tableCards.map((_, index) => index);
-             executeAction('capture');
-             return;
-         }
-         
-         // Check for exact rank matches
-         const exactMatches = [];
-         tableCards.forEach((tableCard, index) => {
-             if (tableCard.value === playedCard.value) {
-                 exactMatches.push(index);
-             }
-         });
-         
-         // Check for sum captures
-         const validCaptures = getValidCaptures(playedCard);
-         const sumCaptures = validCaptures.filter(capture => capture.type === 'sum');
-         
-                  // Debug: Log all capture information
-         console.log(`DEBUG - Card: ${playedCard.value}${playedCard.suit}`);
-         console.log(`DEBUG - Exact matches: ${exactMatches.length}`, exactMatches);
-         console.log(`DEBUG - All valid captures: ${validCaptures.length}`, validCaptures);
-         console.log(`DEBUG - Sum captures: ${sumCaptures.length}`, sumCaptures);
-         console.log(`DEBUG - Table cards:`, tableCards.map(c => c.value + c.suit));
-         
-         // If only one capture option exists, auto-execute it
-         if (exactMatches.length === 1 && sumCaptures.length === 0) {
-             // Single exact match only
-             selectedTableCards = exactMatches;
-             executeAction('capture');
-             return;
-         } else if (exactMatches.length === 0 && sumCaptures.length === 1) {
-             // Single sum capture only
-             selectedTableCards = sumCaptures[0].cards;
-             executeAction('capture');
-             return;
-         } else if (exactMatches.length === 0 && sumCaptures.length === 0) {
-             // NO CAPTURES POSSIBLE - auto-lay the card
-             console.log(`No captures possible for ${playedCard.value}${playedCard.suit} - auto-laying card`);
-             executeAction('lay');
-             return;
-         }
-         
-         // Multiple capture options - show manual selection interface
-         updateCardVisuals();
-         updateActionButtons();
-         
-         // Highlight suggested captures
-         if (exactMatches.length > 0) {
-             const tableCardElements = document.querySelectorAll('#table-cards .card');
-             exactMatches.forEach(index => {
-                 if (tableCardElements[index]) {
-                     tableCardElements[index].classList.add('suggested');
-                 }
-             });
-         }
-     }
-    
     function selectTableCard(cardIndex) {
-        if (currentPlayer !== 0) return; // Not player's turn
         if (selectedPlayerCard === null) return; // Must select hand card first
         
         const tableCardIndex = selectedTableCards.indexOf(cardIndex);
@@ -2315,139 +4644,8 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         updateCardVisuals();
-        updateActionButtons();
-    }
-    
-    function updateCardVisuals() {
-        // Update player hand cards with enhanced visual feedback
-        const playerCardElements = document.querySelectorAll('#player-cards .card');
-        playerCardElements.forEach((element, index) => {
-            // Kill any existing animations first to prevent conflicts
-            gsap.killTweensOf(element);
-            
-            element.classList.remove('selected', 'playable', 'suggested');
-            element.style.filter = '';
-            element.style.boxShadow = '';
-            element.style.pointerEvents = '';
-            
-            if (selectedPlayerCard === index) {
-                element.classList.add('selected');
-                // Get the stored original transform for this card
-                const originalTransform = element._originalTransform;
-                if (originalTransform) {
-                    // More subtle selection effect - smaller lift and scale
-                    gsap.set(element, {
-                        x: originalTransform.x,
-                        y: originalTransform.y - 12,
-                        rotation: originalTransform.rotation,
-                        scale: 1.03,
-                        zIndex: 200
-                    });
-                }
-                element.style.boxShadow = '0 4px 12px rgba(59, 130, 246, 0.3), 0 0 0 1px rgba(59, 130, 246, 0.2)';
-                element.style.filter = 'brightness(1.03) contrast(1.02)';
-                element.style.pointerEvents = 'auto';
-            } else if (currentPlayer === 0) {
-                element.classList.add('playable');
-                // Return to original position first
-                const originalTransform = element._originalTransform;
-                if (originalTransform) {
-                    gsap.set(element, {
-                        x: originalTransform.x,
-                        y: originalTransform.y,
-                        rotation: originalTransform.rotation,
-                        scale: originalTransform.scale,
-                        zIndex: originalTransform.zIndex
-                    });
-                }
-                // More subtle glow for playable cards
-                element.style.boxShadow = '0 1px 6px rgba(59, 130, 246, 0.15)';
-                element.style.filter = 'brightness(1.02)';
-                element.style.pointerEvents = 'auto';
-            } else {
-                // Return to original position and heavily dim cards when not player's turn
-                const originalTransform = element._originalTransform;
-                if (originalTransform) {
-                    gsap.set(element, {
-                        x: originalTransform.x,
-                        y: originalTransform.y,
-                        rotation: originalTransform.rotation,
-                        scale: originalTransform.scale,
-                        zIndex: originalTransform.zIndex
-                    });
-                }
-                element.style.filter = 'brightness(0.4) saturate(0.3) contrast(0.8)';
-                element.style.pointerEvents = 'none'; // Disable clicking and hovering
-            }
-        });
-        
-        // Update table cards with enhanced selection feedback
-        const tableCardElements = document.querySelectorAll('#table-cards .card');
-        tableCardElements.forEach((element, index) => {
-            // Kill any existing animations first to prevent conflicts
-            gsap.killTweensOf(element);
-            
-            element.classList.remove('selected', 'suggested', 'capturable');
-            element.style.filter = '';
-            element.style.boxShadow = '';
-            
-            if (selectedTableCards.includes(index)) {
-                element.classList.add('selected');
-                // Get the stored original transform for this card
-                const originalTransform = element._originalTransform;
-                if (originalTransform) {
-                    // More subtle selection effect - smaller lift and scale
-                    gsap.set(element, {
-                        x: originalTransform.x,
-                        y: originalTransform.y - 5,
-                        rotation: originalTransform.rotation,
-                        scale: 1.02,
-                        zIndex: 150
-                    });
-                }
-                element.style.boxShadow = '0 3px 10px rgba(34, 197, 94, 0.3), 0 0 0 1px rgba(34, 197, 94, 0.2)';
-                element.style.filter = 'brightness(1.05) contrast(1.02)';
-            } else if (selectedPlayerCard !== null) {
-                // Return to original position first
-                const originalTransform = element._originalTransform;
-                if (originalTransform) {
-                    gsap.set(element, {
-                        x: originalTransform.x,
-                        y: originalTransform.y,
-                        rotation: originalTransform.rotation,
-                        scale: originalTransform.scale,
-                        zIndex: originalTransform.zIndex
-                    });
-                }
-                
-                // Show which cards can be captured
-                const playedCard = playerHand[selectedPlayerCard];
-                const validCaptures = getValidCaptures(playedCard);
-                const canCapture = validCaptures.some(capture => capture.cards.includes(index));
-                
-                if (canCapture) {
-                    element.classList.add('capturable');
-                    element.style.boxShadow = '0 2px 8px rgba(34, 197, 94, 0.15), 0 0 0 1px rgba(34, 197, 94, 0.1)';
-                    element.style.filter = 'brightness(1.03)';
-                } else {
-                    // More subtle dimming for non-capturable cards
-                    element.style.filter = 'brightness(0.85) saturate(0.8)';
-                }
-            } else {
-                // Return to original position when no card is selected
-                const originalTransform = element._originalTransform;
-                if (originalTransform) {
-                    gsap.set(element, {
-                        x: originalTransform.x,
-                        y: originalTransform.y,
-                        rotation: originalTransform.rotation,
-                        scale: originalTransform.scale,
-                        zIndex: originalTransform.zIndex
-                    });
-                }
-            }
-        });
-    }
+            updateActionButtons();
+}
     
               function updateActionButtons() {
          // No buttons needed anymore - everything is auto-executed!
@@ -2462,71 +4660,6 @@ document.addEventListener('DOMContentLoaded', function() {
              actionButtonsContainer.innerHTML = '';
          }
      }
-    
-         function getValidCaptures(playedCard) {
-         const validCaptures = [];
-         
-         // Jack captures ALL table cards
-         if (playedCard.value === 'J') {
-             if (tableCards.length > 0) {
-                 validCaptures.push({
-                     type: 'jack',
-                     cards: tableCards.map((_, index) => index),
-                     description: `Jack captures all ${tableCards.length} table cards`
-                 });
-             }
-             return validCaptures; // Jack can only capture all or nothing
-         }
-         
-         // Capture by rank (exact match)
-         tableCards.forEach((tableCard, index) => {
-             if (tableCard.value === playedCard.value) {
-                 validCaptures.push({
-                     type: 'rank',
-                     cards: [index],
-                     description: `Capture ${tableCard.value} with ${playedCard.value}`
-                 });
-             }
-         });
-         
-         // Capture by sum (only for number cards)
-         if (playedCard.numericValue > 0) {
-             const sumCaptures = findSumCaptures(playedCard.numericValue);
-             validCaptures.push(...sumCaptures);
-         }
-         
-         return validCaptures;
-     }
-    
-    function findSumCaptures(targetSum) {
-        const captures = [];
-        const numericTableCards = tableCards.map((card, index) => ({
-            index,
-            value: card.numericValue,
-            card
-        })).filter(item => item.value > 0); // Only number cards can be used in sums
-        
-        // Find all combinations that sum to target
-        function findCombinations(cards, target, current = [], start = 0) {
-            if (target === 0 && current.length > 1) { // Need at least 2 cards for sum capture
-                captures.push({
-                    type: 'sum',
-                    cards: current.map(item => item.index),
-                    description: `Capture ${current.map(item => item.card.value).join(' + ')} = ${targetSum}`
-                });
-                return;
-            }
-            
-            for (let i = start; i < cards.length; i++) {
-                if (cards[i].value <= target) {
-                    findCombinations(cards, target - cards[i].value, [...current, cards[i]], i + 1);
-                }
-            }
-        }
-        
-        findCombinations(numericTableCards, targetSum);
-        return captures;
-    }
     
          function isValidCaptureSelection(playedCard, selectedIndices) {
          if (selectedIndices.length === 0) return false;
@@ -2553,66 +4686,7 @@ document.addEventListener('DOMContentLoaded', function() {
          return sum === playedCard.numericValue;
      }
     
-             window.executeAction = function(action) {
-        console.log('=== EXECUTE ACTION CALLED ===');
-        console.log('Action:', action);
-        console.log('Selected player card:', selectedPlayerCard);
-        
-        if (selectedPlayerCard === null) {
-            console.log('No card selected for action:', action);
-            return;
-        }
-        
-        const playedCard = playerHand[selectedPlayerCard];
-        console.log(`Executing ${action} with card:`, playedCard.value + playedCard.suit);
-         
-        if (action === 'capture') {
-            console.log('Taking CAPTURE branch');
-            lastAction = 'capture'; // Track that this was a capture
-            
-                         // Execute capture with throwing animation
-             const capturedCards = selectedTableCards.map(index => tableCards[index]);
-             capturedCards.push(playedCard); // Add played card to captured pile
-             
-             // Show player throwing card to center and capturing
-             showPlayerCaptureMove(selectedPlayerCard, selectedTableCards, () => {
-                 console.log('Capture animation complete, executing capture logic...');
-                 playerCapturedCards.push(...capturedCards);
-                 lastCapturer = 0; // Player is the last capturer
-                 
-                 // Remove captured cards from table
-                 selectedTableCards.sort((a, b) => b - a); // Sort descending to remove from end first
-                 selectedTableCards.forEach(index => {
-                     tableCards.splice(index, 1);
-                 });
-                 
-                 // Remove played card from hand
-                 playerHand.splice(selectedPlayerCard, 1);
-                 
-                 console.log(`Player captured: ${capturedCards.map(c => c.value + c.suit).join(', ')}`);
-                 
-                 // Clear selections and continue
-                 finishAction();
-             });
-        } else if (action === 'lay') {
-            console.log('Taking LAY branch');
-            lastAction = 'lay'; // Track that this was a lay
-            
-            // Show player throwing card to center and laying
-            showPlayerLayMove(selectedPlayerCard, () => {
-                console.log('Lay animation complete, executing lay logic...');
-                tableCards.push(playedCard);
-                playerHand.splice(selectedPlayerCard, 1);
-                
-                console.log(`Player laid: ${playedCard.value}${playedCard.suit}`);
-                
-                // Clear selections and continue
-                finishAction();
-            });
-        } else {
-            console.log('Unknown action:', action);
-        }
-    }
+        // Duplicate function removed - using the first executeAction function for both single and multiplayer
      
      function finishAction() {
          // Clear selections
@@ -2628,8 +4702,11 @@ document.addEventListener('DOMContentLoaded', function() {
          console.log('About to call nextTurn...');
          console.log('Current player before nextTurn:', currentPlayer);
          
+         // For online games, don't call nextTurn here - it will be handled by Firebase listener
+         if (!window.isOnlineGame) {
          // Next turn
          nextTurn();
+         }
      }
      
      function animateCapture(playerCardIndex, tableCardIndices, callback) {
@@ -2796,71 +4873,7 @@ document.addEventListener('DOMContentLoaded', function() {
      }
  }
      
-     function animateLayCard(playerCardIndex, callback) {
-         const playerCardElement = document.querySelectorAll('#player-cards .card')[playerCardIndex];
-         const tableCenter = document.getElementById('table-cards');
-         
-         // Safety checks
-         if (!playerCardElement || !tableCenter) {
-             console.log('Missing elements for lay animation, skipping');
-             callback();
-             return;
-         }
-         
-         const tableBounds = tableCenter.getBoundingClientRect();
-         const cardBounds = playerCardElement.getBoundingClientRect();
-         const gameAreaRect = document.getElementById('game-area').getBoundingClientRect();
-         
-         // Calculate table center position
-         const targetX = (tableBounds.left - gameAreaRect.left) + tableBounds.width / 2 - cardBounds.width / 2;
-         const targetY = (tableBounds.top - gameAreaRect.top) + tableBounds.height / 2 - cardBounds.height / 2;
-         
-         // Create lay animation timeline
-         const layTimeline = gsap.timeline({
-             onComplete: callback
-         });
-         
-         // Step 1: Lift card up slightly
-         layTimeline.to(playerCardElement, {
-             duration: 0.1,
-             y: '-=20',
-             scale: 1.1,
-             ease: "power2.out"
-         });
-         
-         // Step 2: Arc motion to table center
-         layTimeline.to(playerCardElement, {
-             duration: 0.3,
-             x: targetX - (cardBounds.left - gameAreaRect.left),
-             y: targetY - (cardBounds.top - gameAreaRect.top),
-             rotation: (Math.random() - 0.5) * 30, // Random rotation for natural look
-             scale: 1,
-             ease: "power2.inOut",
-             transformOrigin: "center"
-         });
-         
-         // Step 3: Gentle bounce when landing
-         layTimeline.to(playerCardElement, {
-             duration: 0.1,
-             scale: 1.05,
-             ease: "power2.out"
-         });
-         
-         layTimeline.to(playerCardElement, {
-             duration: 0.15,
-             scale: 1,
-             ease: "bounce.out"
-         });
-         
-         // Step 4: Add subtle glow effect briefly
-         layTimeline.set(playerCardElement, {
-             boxShadow: '0 0 15px rgba(59, 130, 246, 0.4)'
-         }, 0.4);
-         
-         layTimeline.set(playerCardElement, {
-             boxShadow: ''
-         }, 0.6);
-     }
+
     
              // Removed unused helper functions:
     // - cancelSelection() - no cancel button needed
@@ -3729,203 +5742,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-         // Player card throwing animations that match the bot's animations
-     function showPlayerCaptureMove(playerCardIndex, tableCardIndices, callback) {
-         const playedCard = playerHand[playerCardIndex];
-         const playerCardElements = document.querySelectorAll('#player-cards .card');
-         const playerCardElement = playerCardElements[playerCardIndex];
-         
-         if (!playerCardElement) {
-             callback();
-             return;
-         }
-         
-         // Create a visual copy of the player card to animate (like the bot does)
-         const cardCopy = createCardElement(playedCard, true, 0, 1);
-         cardCopy.style.position = 'absolute';
-         cardCopy.style.zIndex = '1000';
-         cardCopy.style.pointerEvents = 'none';
-         
-         // Position it at the player card location
-         const playerCardRect = playerCardElement.getBoundingClientRect();
-         const gameAreaRect = document.getElementById('game-area').getBoundingClientRect();
-         
-         cardCopy.style.left = (playerCardRect.left - gameAreaRect.left) + 'px';
-         cardCopy.style.top = (playerCardRect.top - gameAreaRect.top) + 'px';
-         cardCopy.style.width = playerCardRect.width + 'px';
-         cardCopy.style.height = playerCardRect.height + 'px';
-         
-         document.getElementById('game-area').appendChild(cardCopy);
-         
-         // Hide the original player card
-         gsap.set(playerCardElement, { opacity: 0 });
-         
-         // Create animation timeline - same style as AI
-         const playerMoveTimeline = gsap.timeline({
-             onComplete: () => {
-                 // Clean up and execute the actual move
-                 if (cardCopy.parentNode) {
-                     cardCopy.parentNode.removeChild(cardCopy);
-                 }
-                 callback();
-             }
-         });
-         
-         // Step 1: Move card to center
-         const centerArea = document.querySelector('.center-area');
-         const centerRect = centerArea.getBoundingClientRect();
-         const targetX = (centerRect.left - gameAreaRect.left) + centerRect.width / 2 - playerCardRect.width / 2;
-         const targetY = (centerRect.top - gameAreaRect.top) + centerRect.height / 2 - playerCardRect.height / 2;
-         
-                   // Calculate scale to match table card size (make it smaller)
-          const tableCardWidth = 140; // Smaller target size to match table cards better
-          const playerCardWidth = playerCardRect.width;
-          const targetScale = tableCardWidth / playerCardWidth;
-          
-                   playerMoveTimeline.to(cardCopy, {
-             duration: 0.2, // Much faster
-             x: targetX - (playerCardRect.left - gameAreaRect.left),
-             y: targetY - (playerCardRect.top - gameAreaRect.top),
-             rotation: 0,
-             scale: targetScale, // Scale down to match table card size
-             ease: "power2.out"
-         });
-        
-        // Step 2: Very brief pause at center
-        playerMoveTimeline.to({}, { duration: 0.1 }); // Much shorter pause
-         
-         // Step 3: Animate capture - table cards fly to the player card
-         const tableCardElements = document.querySelectorAll('#table-cards .card');
-         const targetCards = tableCardIndices.map(index => tableCardElements[index]).filter(el => el);
-         
-         if (targetCards.length > 0) {
-             // Highlight target cards briefly
-             targetCards.forEach(targetCard => {
-                 if (targetCard) {
-                     targetCard.style.border = '3px solid #22c55e';
-                     targetCard.style.boxShadow = '0 0 20px rgba(34, 197, 94, 0.6)';
-                 }
-             });
-             
-             playerMoveTimeline.call(() => {
-                 // Animate target cards flying to the player card - ultra fast
-                 targetCards.forEach((targetCard, index) => {
-                     if (targetCard) {
-                         gsap.to(targetCard, {
-                             duration: 0.15, // Much faster
-                             x: targetX - (playerCardRect.left - gameAreaRect.left) + index * 2,
-                             y: targetY - (playerCardRect.top - gameAreaRect.top) + index * 2,
-                             rotation: (Math.random() - 0.5) * 20,
-                             scale: 0.8,
-                             ease: "power2.in",
-                             delay: index * 0.02 // Shorter stagger
-                         });
-                     }
-                 });
-                 
-                 // Animate all cards disappearing
-                 const allCardsToHide = [cardCopy, ...targetCards].filter(el => el);
-                 if (allCardsToHide.length > 0) {
-                     gsap.to(allCardsToHide, {
-                         duration: 0.1, // Ultra fast
-                         opacity: 0,
-                         scale: 0.5,
-                         ease: "power2.in",
-                         delay: 0.2 // Much shorter delay
-                     });
-                 }
-             }, 0.2); // Start capture animation sooner
-             
-             // Total timeline duration - ultra short
-             playerMoveTimeline.to({}, { duration: 0.5 }); // Much shorter total time
-         } else {
-             // No cards to capture, just hide the played card
-             playerMoveTimeline.to(cardCopy, {
-                 duration: 0.2,
-                 opacity: 0,
-                 scale: 0.8,
-                 delay: 0.2
-             });
-         }
-     }
 
-     function showPlayerLayMove(playerCardIndex, callback) {
-         const playedCard = playerHand[playerCardIndex];
-         const playerCardElements = document.querySelectorAll('#player-cards .card');
-         const playerCardElement = playerCardElements[playerCardIndex];
-         
-         if (!playerCardElement) {
-             callback();
-             return;
-         }
-         
-         // Create a visual copy of the player card to animate
-         const cardCopy = createCardElement(playedCard, true, 0, 1);
-         cardCopy.style.position = 'absolute';
-         cardCopy.style.zIndex = '1000';
-         cardCopy.style.pointerEvents = 'none';
-         
-         // Position it at the player card location
-         const playerCardRect = playerCardElement.getBoundingClientRect();
-         const gameAreaRect = document.getElementById('game-area').getBoundingClientRect();
-         
-         cardCopy.style.left = (playerCardRect.left - gameAreaRect.left) + 'px';
-         cardCopy.style.top = (playerCardRect.top - gameAreaRect.top) + 'px';
-         cardCopy.style.width = playerCardRect.width + 'px';
-         cardCopy.style.height = playerCardRect.height + 'px';
-         
-         document.getElementById('game-area').appendChild(cardCopy);
-         
-         // Hide the original player card
-         gsap.set(playerCardElement, { opacity: 0 });
-         
-         // Create animation timeline
-         const playerLayTimeline = gsap.timeline({
-             onComplete: () => {
-                 // Clean up and execute the actual move
-                 if (cardCopy.parentNode) {
-                     cardCopy.parentNode.removeChild(cardCopy);
-                 }
-                 callback();
-             }
-         });
-         
-                   // Step 1: Move card to center
-          const centerArea = document.querySelector('.center-area');
-          const centerRect = centerArea.getBoundingClientRect();
-          const targetX = (centerRect.left - gameAreaRect.left) + centerRect.width / 2 - playerCardRect.width / 2;
-          const targetY = (centerRect.top - gameAreaRect.top) + centerRect.height / 2 - playerCardRect.height / 2;
-          
-          // Calculate scale to match table card size (make it smaller)
-          const tableCardWidth = 140; // Smaller target size to match table cards better
-          const playerCardWidth = playerCardRect.width;
-          const targetScale = tableCardWidth / playerCardWidth;
-          
-                   playerLayTimeline.to(cardCopy, {
-             duration: 0.2, // Much faster
-             x: targetX - (playerCardRect.left - gameAreaRect.left),
-             y: targetY - (playerCardRect.top - gameAreaRect.top),
-             rotation: (Math.random() - 0.5) * 15,
-             scale: targetScale, // Scale down to match table card size
-             ease: "power2.out"
-         });
-        
-        // Step 2: Very brief pause and then settle on table
-        playerLayTimeline.to(cardCopy, {
-            duration: 0.15, // Much faster
-            y: targetY - (playerCardRect.top - gameAreaRect.top) + 20,
-            scale: targetScale, // Keep the same small scale, don't expand
-            ease: "power2.out",
-            delay: 0.1 // Shorter delay
-        });
-        
-        // Step 3: Fade out quickly
-        playerLayTimeline.to(cardCopy, {
-            duration: 0.1, // Much faster
-            opacity: 0,
-            delay: 0.1 // Shorter delay
-        });
-     }
     
     function findBestAIMove(aiHand) {
         const moves = [];
@@ -4232,127 +6049,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 
             default:
                 return moves[0];
-        }
-    }
-
-    function updateGameUI() {
-        // Create or update game UI elements with improved styling to match popup design
-        let gameUIContainer = document.querySelector('.game-ui');
-        if (!gameUIContainer) {
-            gameUIContainer = document.createElement('div');
-            gameUIContainer.className = 'game-ui';
-            document.getElementById('game-area').appendChild(gameUIContainer);
-            
-            // Create the initial structure only once
-            gameUIContainer.innerHTML = `
-                <div class="game-info">
-                    <div class="game-info-header">
-                        <h3 id="game-round-display">Round ${currentRound}</h3>
-                        <div class="deal-indicator" id="game-deal-display">Deal ${currentDeal}/6</div>
-                    </div>
-                    
-                    <div class="score-section">
-                        <div class="score-title">Current Score</div>
-                        <div class="score-display">
-                            <div class="player-score">
-                                <div class="score-avatar player-avatar-small" id="game-player-avatar" style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); ${window.currentUserData?.profilePicture ? `background-image: url(${window.currentUserData.profilePicture}); background-size: cover; background-position: center; font-size: 0;` : ''}">${window.currentUserData?.profilePicture ? '' : '👤'}</div>
-                                <div class="score-info">
-                                    <span class="score-label" id="game-player-name">${currentUser?.displayName || 'You'}</span>
-                                    <span class="score-value" id="game-player-score">${gameScore.player}</span>
-                                </div>
-                            </div>
-                            <div class="score-divider">-</div>
-                            <div class="opponent-score">
-                                <div class="score-avatar opponent-avatar-small">
-                                    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="currentColor">
-                                        <path d="M9 15C8.44771 15 8 15.4477 8 16C8 16.5523 8.44771 17 9 17C9.55229 17 10 16.5523 10 16C10 15.4477 9.55229 15 9 15Z" fill="currentColor"></path>
-                                        <path d="M14 16C14 15.4477 14.4477 15 15 15C15.5523 15 16 15.4477 16 16C16 16.5523 15.5523 17 15 17C14.4477 17 14 16.5523 14 16Z" fill="currentColor"></path>
-                                        <path fill-rule="evenodd" clip-rule="evenodd" d="M12 1C10.8954 1 10 1.89543 10 3C10 3.74028 10.4022 4.38663 11 4.73244V7H6C4.34315 7 3 8.34315 3 10V20C3 21.6569 4.34315 23 6 23H18C19.6569 23 21 21.6569 21 20V10C21 8.34315 19.6569 7 18 7H13V4.73244C13.5978 4.38663 14 3.74028 14 3C14 1.89543 13.1046 1 12 1ZM5 10C5 9.44772 5.44772 9 6 9H7.38197L8.82918 11.8944C9.16796 12.572 9.86049 13 10.618 13H13.382C14.1395 13 14.832 12.572 15.1708 11.8944L16.618 9H18C18.5523 9 19 9.44772 19 10V20C19 20.5523 18.5523 21 18 21H6C5.44772 21 5 20.5523 5 20V10ZM13.382 11L14.382 9H9.61803L10.618 11H13.382Z" fill="currentColor"></path>
-                                        <path d="M1 14C0.447715 14 0 14.4477 0 15V17C0 17.5523 0.447715 18 1 18C1.55228 18 2 17.5523 2 17V15C2 14.4477 1.55228 14 1 14Z" fill="currentColor"></path>
-                                        <path d="M22 15C22 14.4477 22.4477 14 23 14C23.5523 14 24 14.4477 24 15V17C24 17.5523 23.5523 18 23 18C22.4477 18 22 17.5523 22 17V15Z" fill="currentColor"></path>
-                                    </svg>
-                                </div>
-                                <div class="score-info">
-                                    <span class="score-label">AI</span>
-                                    <span class="score-value" id="game-opponent-score">${gameScore.opponent}</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="cards-info">
-                        <div class="card-count-row">
-                            <div class="card-count-item">
-                                <span class="count-label">Hand</span>
-                                <span class="count-value" id="game-hand-count">${playerHand.length}</span>
-                            </div>
-                            <div class="card-count-item">
-                                <span class="count-label">Table</span>
-                                <span class="count-value" id="game-table-count">${tableCards.length}</span>
-                            </div>
-                            <div class="card-count-item">
-                                <span class="count-label">Deck</span>
-                                <span class="count-value" id="game-deck-count">${deck.length}</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="action-buttons">
-                    <!-- Action buttons will be populated by updateActionButtons() -->
-                </div>
-            `;
-        } else {
-            // Update only the dynamic values without recreating the structure
-            const cardsInDeck = deck.length;
-            
-            // Update round and deal - show Deal X/6 on mobile, Round X on desktop
-            const roundDisplay = document.getElementById('game-round-display');
-            const dealDisplay = document.getElementById('game-deal-display');
-            const isMobile = window.innerWidth < 768;
-            
-            if (roundDisplay) {
-                roundDisplay.textContent = isMobile ? `Deal ${currentDeal}/6` : `Round ${currentRound}`;
-            }
-            if (dealDisplay) dealDisplay.textContent = `Deal ${currentDeal}/6`;
-            
-            // Update scores
-            const playerScoreElement = document.getElementById('game-player-score');
-            const opponentScoreElement = document.getElementById('game-opponent-score');
-            if (playerScoreElement) playerScoreElement.textContent = gameScore.player;
-            if (opponentScoreElement) opponentScoreElement.textContent = gameScore.opponent;
-            
-            // Update card counts
-            const handCountElement = document.getElementById('game-hand-count');
-            const tableCountElement = document.getElementById('game-table-count');
-            const deckCountElement = document.getElementById('game-deck-count');
-            if (handCountElement) handCountElement.textContent = playerHand.length;
-            if (tableCountElement) tableCountElement.textContent = tableCards.length;
-            if (deckCountElement) deckCountElement.textContent = cardsInDeck;
-            
-            // Update player name and avatar if needed
-            const playerNameElement = document.getElementById('game-player-name');
-            const playerAvatarElement = document.getElementById('game-player-avatar');
-            if (playerNameElement) playerNameElement.textContent = currentUser?.displayName || 'You';
-            if (playerAvatarElement) {
-                const profilePictureUrl = window.currentUserData?.profilePicture;
-                if (profilePictureUrl) {
-                    playerAvatarElement.style.backgroundImage = `url(${profilePictureUrl})`;
-                    playerAvatarElement.style.backgroundSize = 'cover';
-                    playerAvatarElement.style.backgroundPosition = 'center';
-                    playerAvatarElement.style.fontSize = '0';
-                    playerAvatarElement.textContent = '';
-                } else {
-                    playerAvatarElement.style.backgroundImage = '';
-                    playerAvatarElement.style.fontSize = '1.2rem';
-                    playerAvatarElement.textContent = '👤';
-                }
-            }
-        }
-        
-        // Remove turn indicator since we're using card visual states instead
-        let turnIndicator = document.querySelector('.turn-indicator');
-        if (turnIndicator) {
-            turnIndicator.remove();
         }
     }
 
@@ -4682,6 +6378,12 @@ function confirmExitGame() {
         confirmation.remove();
     }
     
+    // Handle online game forfeit
+    if (window.isOnlineGame && currentGameRoom) {
+        forfeitOnlineGame();
+        return;
+    }
+    
     // Record the forfeit as a loss if user is logged in
     if (currentUser) {
         updateUserStats(false); // false = player lost
@@ -4724,6 +6426,46 @@ function confirmExitGame() {
     showUserDashboard();
     
     console.log('Game exited, returning to dashboard');
+}
+
+async function forfeitOnlineGame() {
+    try {
+        // Record forfeit as loss
+        if (currentUser) {
+            updateUserStats(false);
+        }
+        
+        // Mark game as finished with opponent as winner
+        if (isHost && currentGameRoom) {
+            const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
+            const roomDoc = await window.getDoc(roomRef);
+            
+            if (roomDoc.exists()) {
+                const roomData = roomDoc.data();
+                const playerIds = Object.keys(roomData.players);
+                const opponentId = playerIds.find(id => id !== currentUser.uid);
+                
+                await window.updateDoc(roomRef, {
+                    status: 'finished',
+                    winner: opponentId,
+                    finishedAt: new Date()
+                });
+            }
+        }
+        
+        // Clean up
+        cleanupOnlineGame();
+        
+        // Show message and return to dashboard
+        showGameEndMessage('Game forfeited. Returning to dashboard.', 'info');
+        showUserDashboard();
+        
+    } catch (error) {
+        console.error('Error forfeiting online game:', error);
+        // Clean up anyway
+        cleanupOnlineGame();
+        showUserDashboard();
+    }
 }
 
 // Cancel exit and continue playing

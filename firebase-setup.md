@@ -33,6 +33,146 @@ This guide will help you set up Firebase Authentication and Firestore for the Ko
 4. Select a location closest to your users
 5. Click "Done"
 
+### Firestore Collections for Multiplayer
+
+You'll need to create these collections in Firestore:
+
+#### 1. `users` Collection (already exists)
+```javascript
+{
+  username: "player123",
+  email: "player@example.com",
+  coins: 10000,
+  gamesPlayed: 0,
+  gamesWon: 0,
+  gamesLost: 0,
+  profilePicture: null,
+  createdAt: "2024-01-01T00:00:00Z",
+  lastLogin: "2024-01-01T00:00:00Z",
+  // New fields for multiplayer
+  currentGameId: null,
+  isOnline: true,
+  lastActivity: "2024-01-01T00:00:00Z"
+}
+```
+
+#### 2. `gameRooms` Collection (new)
+```javascript
+{
+  id: "game_123456",
+  status: "waiting", // "waiting", "active", "finished"
+  gameMode: "online", // "practice", "ranked", "online"
+  maxPlayers: 2,
+  currentPlayers: 1,
+  createdBy: "user_id_123",
+  createdAt: "2024-01-01T00:00:00Z",
+  players: {
+    "user_id_123": {
+      userId: "user_id_123",
+      username: "Player1",
+      profilePicture: "url_or_null",
+      joinedAt: "2024-01-01T00:00:00Z",
+      isReady: false,
+      coins: 10000
+    }
+  },
+  gameState: {
+    currentRound: 1,
+    currentDeal: 1,
+    currentPlayer: 0,
+    deck: [], // Shuffled deck
+    tableCards: [],
+    playerHands: {
+      "user_id_123": [],
+      "user_id_456": []
+    },
+    capturedCards: {
+      "user_id_123": [],
+      "user_id_456": []
+    },
+    scores: {
+      "user_id_123": 0,
+      "user_id_456": 0
+    },
+    lastCapturer: null,
+    lastAction: null
+  },
+  winner: null,
+  finishedAt: null
+}
+```
+
+#### 3. `gameMoves` Collection (new)
+```javascript
+{
+  gameId: "game_123456",
+  playerId: "user_id_123",
+  moveType: "capture", // "capture", "lay"
+  cardPlayed: {
+    suit: "♠",
+    value: "A",
+    color: "black"
+  },
+  tableCardsSelected: [0, 1], // indices of table cards
+  timestamp: "2024-01-01T00:00:00Z",
+  moveNumber: 1
+}
+```
+
+#### 4. `matchmaking` Collection (new)
+```javascript
+{
+  userId: "user_id_123",
+  gameMode: "online",
+  preferredOpponents: 1,
+  createdAt: "2024-01-01T00:00:00Z",
+  status: "searching" // "searching", "matched", "cancelled"
+}
+```
+
+### Firestore Security Rules for Multiplayer
+
+Replace your current Firestore rules with these comprehensive rules:
+
+```javascript
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users can only read/write their own user document
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      // Allow reading other users' basic info for game display
+      allow read: if request.auth != null && 
+        resource.data.keys().hasOnly(['username', 'profilePicture', 'isOnline']);
+    }
+    
+    // Game rooms - players can read/write games they're part of
+    match /gameRooms/{gameId} {
+      allow read: if request.auth != null && 
+        request.auth.uid in resource.data.players.keys();
+      allow create: if request.auth != null && 
+        request.auth.uid == request.resource.data.createdBy;
+      allow update: if request.auth != null && 
+        request.auth.uid in resource.data.players.keys();
+    }
+    
+    // Game moves - players can create moves for their games
+    match /gameMoves/{moveId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && 
+        request.auth.uid == request.resource.data.playerId;
+    }
+    
+    // Matchmaking - users can manage their own matchmaking entries
+    match /matchmaking/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      // Allow reading all matchmaking entries for game matching
+      allow read: if request.auth != null;
+    }
+  }
+}
+```
+
 ## Step 4: Set up Firebase Storage
 
 1. In the Firebase console, go to **Storage**
@@ -69,27 +209,7 @@ service firebase.storage {
 
 **Important**: The second rule (allowing all paths) is for development only. Remove it in production and only keep the specific profile-pictures rule.
 
-### Firestore Security Rules (Production)
-For production, replace the test rules with these security rules:
-
-```javascript
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    // Users can only read/write their own user document
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-    
-    // Game sessions (if you add multiplayer later)
-    match /games/{gameId} {
-      allow read, write: if request.auth != null;
-    }
-  }
-}
-```
-
-## Step 4: Get Your Firebase Config
+## Step 5: Get Your Firebase Config
 
 1. In the Firebase console, go to **Project Settings** (gear icon)
 2. Scroll down to "Your apps"
@@ -98,7 +218,7 @@ service cloud.firestore {
 5. Click "Register app"
 6. Copy the `firebaseConfig` object
 
-## Step 5: Update Your Game
+## Step 6: Update Your Game
 
 1. Open `index.html`
 2. Find the Firebase configuration section
@@ -115,7 +235,7 @@ const firebaseConfig = {
 };
 ```
 
-## Step 6: Deploy Your Game
+## Step 7: Deploy Your Game
 
 ### Option 1: Firebase Hosting (Recommended)
 
@@ -151,7 +271,7 @@ You can also deploy to:
 - **Vercel**: Connect your GitHub repository
 - **GitHub Pages**: Push to a GitHub repository
 
-## Step 7: Test Your Setup
+## Step 8: Test Your Setup
 
 1. Open your deployed game
 2. Try creating a new account
@@ -167,22 +287,6 @@ If you don't want to set up Firebase right away, the game includes a demo mode t
 - Works offline
 
 The demo mode automatically activates if Firebase isn't properly configured.
-
-## User Data Structure
-
-The game creates user documents in Firestore with this structure:
-
-```javascript
-{
-  username: "player123",
-  email: "player@example.com",
-  coins: 10000,
-  gamesPlayed: 0,
-  gamesWon: 0,
-  createdAt: "2024-01-01T00:00:00Z",
-  lastLogin: "2024-01-01T00:00:00Z"
-}
-```
 
 ## Security Considerations
 
