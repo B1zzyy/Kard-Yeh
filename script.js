@@ -1,4 +1,10 @@
 // Firebase Authentication and User Management
+
+// Global guard variables to prevent infinite loops
+let isAnimatingCards = false;
+let isEndingRound = false;
+let isHandlingGameStateUpdate = false;
+let isShowingRoundPopup = false;
 let currentUser = null;
 let userCoins = 10000;
 
@@ -514,8 +520,20 @@ function createCardElement(card, faceUp, index, totalCards) {
     return cardDiv;
 }
 
+// Guard to prevent multiple simultaneous timeouts in createAndAnimateCards
+// (variable declared at top of file)
+
 // createAndAnimateCards function - moved to top for online multiplayer access
 function createAndAnimateCards() {
+    // Prevent multiple simultaneous calls
+    if (isAnimatingCards) {
+        console.log('createAndAnimateCards already in progress, skipping...');
+        return;
+    }
+    
+    isAnimatingCards = true;
+    console.log('🔒 STARTING createAndAnimateCards - locked');
+    
     const playerCardsContainer = document.getElementById('player-cards');
     const opponentCardsContainer = document.getElementById('opponent-cards');
     let tableCardsDiv = document.getElementById('table-cards');
@@ -525,6 +543,8 @@ function createAndAnimateCards() {
         console.log('Basic card containers not found, skipping createAndAnimateCards');
         console.log('Player container:', !!playerCardsContainer);
         console.log('Opponent container:', !!opponentCardsContainer);
+        isAnimatingCards = false;
+        console.log('🔓 FINISHED createAndAnimateCards (early exit) - unlocked');
         return;
     }
     
@@ -675,6 +695,10 @@ function createAndAnimateCards() {
         
         console.log(`=== DEAL ${currentDeal} COMPLETE ===`);
         console.log(`Deck integrity: ${deck.length + tableCards.length + playerHand.length + opponentHand.length} = 52? ${deck.length + tableCards.length + playerHand.length + opponentHand.length === 52}`);
+        
+        // Unlock the animation guard
+        isAnimatingCards = false;
+        console.log('🔓 FINISHED createAndAnimateCards - unlocked');
     }, 2000);
 }
 
@@ -2953,6 +2977,10 @@ function startOnlineGame(roomData) {
     window.isOnlineGame = true;
     window.onlineGameRoom = roomData;
     
+    // CRITICAL FIX: Set isHost based on who created the room
+    isHost = roomData.createdBy === currentUser.uid;
+    console.log('🎯 HOST STATUS SET:', 'createdBy:', roomData.createdBy, 'currentUser:', currentUser.uid, 'isHost:', isHost);
+    
     // Initialize local game state from server
     const gameState = roomData.gameState;
     const playerIds = Object.keys(roomData.players);
@@ -3031,13 +3059,23 @@ function listenToGameStateChanges() {
 }
 
 function handleGameStateUpdate(newGameState) {
+    console.log('🔥🔥🔥 FUNCTION CALLED - handleGameStateUpdate ENTRY POINT 🔥🔥🔥');
     if (!window.isOnlineGame) return;
     
-    console.log('=== HANDLE GAME STATE UPDATE CALLED ===');
+    // Force reset the guard if it's been locked for too long
+    if (isHandlingGameStateUpdate) {
+        console.warn('🚨 FORCE RESETTING handleGameStateUpdate guard - was stuck!');
+        isHandlingGameStateUpdate = false;
+    }
+    
+    isHandlingGameStateUpdate = true;
+    console.log('🔒 STARTING handleGameStateUpdate - locked');
+    
+    try {
+        console.log('🚨 ENTERING TRY BLOCK - handleGameStateUpdate');
+        console.log('=== HANDLE GAME STATE UPDATE CALLED ===');
     console.log('Current playerHand before update:', playerHand.length, 'cards');
     console.log('New game state playerHands:', newGameState.playerHands);
-    console.log('Stack trace for game state update:');
-    console.trace();
     
     const playerIds = Object.keys(window.onlineGameRoom.players);
     const currentPlayerId = currentUser.uid;
@@ -3060,26 +3098,198 @@ function handleGameStateUpdate(newGameState) {
     playerCapturedCards = newGameState.capturedCards[currentPlayerId] || [];
     opponentCapturedCards = newGameState.capturedCards[opponentId] || [];
     
+    console.log('✅ Successfully updated hands and captured cards');
+    
     // Update scores
+    const oldGameScore = { ...gameScore };
     gameScore = {
         player: newGameState.scores[currentPlayerId] || 0,
         opponent: newGameState.scores[opponentId] || 0
     };
     
+    // Track if we need to show round score popup for non-host
+    let shouldShowRoundPopup = false;
+    
+    // Store old deal value before updating
+    const previousDeal = currentDeal;
+    
+    console.log('✅ About to check popup conditions...');
+    
+    // Check if non-host should show round score popup
+    console.log('=== CHECKING NON-HOST POPUP CONDITIONS ===');
+    console.log('isHost:', isHost);
+    console.log('newGameState.currentDeal:', newGameState.currentDeal);
+    console.log('currentDeal (local):', currentDeal);
+    console.log('previousDeal:', previousDeal);
+    console.log('currentRound (local):', currentRound);
+    console.log('newGameState.currentRound:', newGameState.currentRound);
+    console.log('oldGameScore:', oldGameScore);
+    console.log('gameScore:', gameScore);
+    console.log('newGameState.scores:', newGameState.scores);
+    console.log('Score changed?', gameScore.player !== oldGameScore.player || gameScore.opponent !== oldGameScore.opponent);
+    
+    // Non-host should show popup when:
+    // 1. Deal transitioned from < 6 to >= 6 (round just ended)
+    // 2. OR scores changed (indicating round processing happened)
+    // 3. OR round number increased (new round started)
+    // 4. OR we're in round 2+ with deal 1 and haven't shown popup yet (missed transition)
+    if (!isHost) {
+        console.log('🔍 NON-HOST POPUP DEBUG - ENTRY');
+        console.log('   previousDeal:', previousDeal, 'newGameState.currentDeal:', newGameState.currentDeal);
+        console.log('   currentRound:', currentRound, 'newGameState.currentRound:', newGameState.currentRound);
+        console.log('   oldGameScore:', oldGameScore, 'newGameScore:', gameScore);
+        
+        const dealJustEnded = previousDeal < 6 && newGameState.currentDeal >= 6;
+        const scoresChanged = gameScore.player !== oldGameScore.player || gameScore.opponent !== oldGameScore.opponent;
+        const roundChanged = newGameState.currentRound > currentRound;
+        const missedRoundEnd = newGameState.currentRound >= 2 && newGameState.currentDeal === 1 && (gameScore.player > 0 || gameScore.opponent > 0);
+        
+        // NEW: Check for dedicated round end flag
+        const roundEndFlagSet = newGameState.roundJustEnded && !window.processedRoundEndFlag;
+        
+        console.log('=== DETAILED POPUP CONDITIONS DEBUG ===');
+        console.log('dealJustEnded calculation:', `${previousDeal} < 6 && ${newGameState.currentDeal} >= 6 = ${dealJustEnded}`);
+        console.log('scoresChanged calculation:', `(${gameScore.player} !== ${oldGameScore.player}) || (${gameScore.opponent} !== ${oldGameScore.opponent}) = ${scoresChanged}`);
+        console.log('roundChanged calculation:', `${newGameState.currentRound} > ${currentRound} = ${roundChanged}`);
+        console.log('missedRoundEnd calculation:', `${newGameState.currentRound} >= 2 && ${newGameState.currentDeal} === 1 && (${gameScore.player} > 0 || ${gameScore.opponent} > 0) = ${missedRoundEnd}`);
+        console.log('🚨 NEW: roundEndFlagSet calculation:', `${newGameState.roundJustEnded} && !${window.processedRoundEndFlag} = ${roundEndFlagSet}`);
+        console.log('Final condition result:', dealJustEnded || scoresChanged || roundChanged || missedRoundEnd || roundEndFlagSet);
+        
+        // Show popup when:
+        // 1. Scores changed (most reliable indicator)
+        // 2. OR deal just ended (>= 6) AND we have meaningful scores (not 0:0)
+        // 3. OR new round started with existing scores
+        // 4. OR dedicated round end flag is set
+        const hasValidScores = (gameScore.player > 0 || gameScore.opponent > 0);
+        
+        if (scoresChanged) {
+            console.log('✅ Non-host should show round popup - SCORES CHANGED:', 'Player:', oldGameScore.player, '->', gameScore.player, 'Opponent:', oldGameScore.opponent, '->', gameScore.opponent);
+            shouldShowRoundPopup = true;
+        } else if (roundEndFlagSet && hasValidScores) {
+            console.log('🚨 ✅ Non-host should show round popup - ROUND END FLAG SET with valid scores:', gameScore.player, 'vs', gameScore.opponent);
+            shouldShowRoundPopup = true;
+            window.processedRoundEndFlag = newGameState.roundJustEnded; // Mark as processed
+        } else if (dealJustEnded && hasValidScores) {
+            console.log('✅ Non-host should show round popup - DEAL ENDED with valid scores:', gameScore.player, 'vs', gameScore.opponent);
+            shouldShowRoundPopup = true;
+        } else if (roundChanged && hasValidScores) {
+            console.log('✅ Non-host should show round popup - NEW ROUND with existing scores');
+            shouldShowRoundPopup = true;
+        } else {
+            console.log('❌ Non-host conditions not met for popup');
+            console.log('   scoresChanged:', scoresChanged, 'roundEndFlagSet:', roundEndFlagSet, 'dealJustEnded:', dealJustEnded, 'hasValidScores:', hasValidScores, 'roundChanged:', roundChanged);
+        }
+        
+        console.log('🔍 NON-HOST POPUP DEBUG - AFTER CONDITIONS');
+        console.log('   shouldShowRoundPopup:', shouldShowRoundPopup);
+    }
+    
+    // Add flag to prevent multiple popups for the same round
+    if (!window.lastRoundPopupShown) {
+        window.lastRoundPopupShown = 0;
+    }
+    
+    // Only show popup if we haven't shown it for this round yet
+    // For round endings: show popup for the round that just completed
+    // For new rounds: show popup for the previous round
+    const roundToShow = newGameState.currentRound > currentRound ? newGameState.currentRound - 1 : currentRound;
+    
+    console.log('🔍 POPUP PREVENTION DEBUG');
+    console.log('   shouldShowRoundPopup:', shouldShowRoundPopup);
+    console.log('   window.lastRoundPopupShown:', window.lastRoundPopupShown);
+    console.log('   roundToShow:', roundToShow);
+    console.log('   condition result:', shouldShowRoundPopup && window.lastRoundPopupShown < roundToShow);
+    
+            if (shouldShowRoundPopup && window.lastRoundPopupShown < roundToShow) {
+            console.log('🎉 Showing round popup for round', roundToShow);
+            console.log('   shouldShowRoundPopup:', shouldShowRoundPopup);
+            console.log('   lastRoundPopupShown:', window.lastRoundPopupShown);
+            console.log('   roundToShow:', roundToShow);
+            window.lastRoundPopupShown = roundToShow;
+            showOnlineRoundScorePopup(newGameState, playerIds, oldGameScore);
+    } else if (shouldShowRoundPopup) {
+        console.log('❌ Popup blocked by prevention logic');
+        console.log('   shouldShowRoundPopup:', shouldShowRoundPopup);
+        console.log('   lastRoundPopupShown:', window.lastRoundPopupShown);
+        console.log('   roundToShow:', roundToShow);
+    } else {
+        console.log('❌ shouldShowRoundPopup is false - no popup needed');
+    }
+    
     lastCapturer = newGameState.lastCapturer;
     lastAction = newGameState.lastAction;
+    
+    // Check if we need to deal new cards or end round
+    console.log('=== ROUND END CHECK ===');
+    console.log('playerHand.length:', playerHand.length);
+    console.log('opponentHand.length:', opponentHand.length);
+    console.log('newGameState.currentDeal:', newGameState.currentDeal);
+    console.log('currentDeal (local):', currentDeal);
+    console.log('currentRound (local):', currentRound);
+    console.log('newGameState.currentRound:', newGameState.currentRound);
+    console.log('isHost:', isHost);
+    console.log('newPlayerHand.length:', newPlayerHand.length);
+    console.log('newOpponentHand.length:', newOpponentHand.length);
+    
+    // Check for new round starting (round number increased) BEFORE updating local variables
+    if (newGameState.currentRound > currentRound) {
+        console.log('NEW ROUND DETECTED! Round', currentRound, '->', newGameState.currentRound);
+        console.log('New round started with deal', newGameState.currentDeal);
+        // Update local variables for new round
+        currentRound = newGameState.currentRound;
+        currentDeal = newGameState.currentDeal;
+        // This is a new round, hands should already be dealt by endRoundOnline()
+        // Update visuals and exit
+        updateGameDisplay();
+        createAndAnimateCards();
+        updateGameUI();
+        updateCardVisuals();
+        console.log('New round UI updated, exiting early');
+        isHandlingGameStateUpdate = false;
+        console.log('🔓 FINISHED handleGameStateUpdate (new round) - unlocked');
+        return; // Exit early, don't process old round logic
+    }
+    
+    // Update local variables (only if not a new round)
     currentRound = newGameState.currentRound;
     currentDeal = newGameState.currentDeal;
     
-    // Check if we need to deal new cards
-    if (playerHand.length === 0 && opponentHand.length === 0 && newGameState.currentDeal <= 6) {
-        // Both hands empty, need new deal
-        if (isHost && newGameState.currentDeal < 6) {
-            dealNewHandOnline();
+    // Show round popup if needed (before checking empty hands)
+    if (shouldShowRoundPopup) {
+        console.log('🎉 Showing round score popup for non-host...');
+        showOnlineRoundScorePopup(newGameState, playerIds);
+        // Update visuals and exit to prevent further processing
+        updateGameDisplay();
+        createAndAnimateCards();
+        updateGameUI();
+        updateCardVisuals();
+        isHandlingGameStateUpdate = false;
+        console.log('🔓 FINISHED handleGameStateUpdate (popup shown) - unlocked');
+        return;
+    }
+    
+    // Check for empty hands (need new deal or round end)
+    if (playerHand.length === 0 && opponentHand.length === 0) {
+        console.log('Both hands are empty!');
+        if (newGameState.currentDeal < 6) {
+            console.log('Deal', newGameState.currentDeal, '< 6, need new deal');
+            if (isHost) {
+                console.log('Host dealing new hand...');
+                dealNewHandOnline();
+            }
         } else if (newGameState.currentDeal >= 6) {
-            // Round over
-            endRoundOnline();
+            console.log('Deal', newGameState.currentDeal, '>= 6, round is over!');
+            // Round over - only host handles everything (calculates scores and shows popup)
+            if (isHost) {
+                console.log('Host ending round and will show popup after calculating scores...');
+                endRoundOnline();
+            } else {
+                console.log('Non-host waiting for updated scores from Firebase...');
+                // Non-host will show popup when they receive updated scores via Firebase
+            }
         }
+    } else {
+        console.log('Hands not empty, continuing game...');
     }
     
     // Update visuals
@@ -3088,16 +3298,31 @@ function handleGameStateUpdate(newGameState) {
     updateGameUI();
     updateCardVisuals();
     
+    // Log UI update for debugging
+    console.log('UI updated - Current scores:', gameScore.player, 'vs', gameScore.opponent);
+    
     // Check for game end
     if (gameScore.player >= 16 || gameScore.opponent >= 16) {
         endOnlineGame();
     }
     
     console.log('Game state updated from server:', newGameState);
+    
+    } catch (error) {
+        console.error('Error in handleGameStateUpdate:', error);
+    } finally {
+        // Always unlock the guard
+        isHandlingGameStateUpdate = false;
+        console.log('🔓 FINISHED handleGameStateUpdate - unlocked');
+    }
 }
 
 async function dealNewHandOnline() {
     if (!isHost || !currentGameRoom) return;
+    
+    console.log('=== DEAL NEW HAND ONLINE CALLED ===');
+    console.log('isHost:', isHost);
+    console.log('currentGameRoom:', currentGameRoom);
     
     try {
         const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
@@ -3108,29 +3333,60 @@ async function dealNewHandOnline() {
             const gameState = roomData.gameState;
             const playerIds = Object.keys(roomData.players);
             
+            console.log('Current deal before increment:', gameState.currentDeal);
+            console.log('Deck cards remaining:', gameState.deck.length);
+            
             // Deal 4 new cards to each player
             playerIds.forEach(playerId => {
+                console.log(`Dealing to player ${playerId}, current hand size:`, gameState.playerHands[playerId].length);
                 for (let i = 0; i < 4; i++) {
                     const card = gameState.deck.pop();
                     if (card) {
                         gameState.playerHands[playerId].push(card);
+                        console.log(`  Dealt card ${i+1}: ${card.value}${card.suit}`);
+                    } else {
+                        console.log(`  No card available for slot ${i+1}`);
                     }
                 }
+                console.log(`Player ${playerId} now has ${gameState.playerHands[playerId].length} cards`);
             });
             
+            // Increment deal counter
+            const oldDeal = gameState.currentDeal;
             gameState.currentDeal++;
+            console.log(`Deal incremented from ${oldDeal} to ${gameState.currentDeal}`);
+            console.log('Deck cards remaining after dealing:', gameState.deck.length);
             
             await window.updateDoc(roomRef, {
                 gameState: gameState
             });
+            
+            console.log('Successfully updated Firebase with new deal');
+        } else {
+            console.log('Room document does not exist');
         }
     } catch (error) {
         console.error('Error dealing new hand online:', error);
     }
 }
 
+// Guard to prevent multiple simultaneous calls to endRoundOnline
+// (variable declared at top of file)
+
+// Guard to prevent multiple simultaneous calls to handleGameStateUpdate
+// (variable declared at top of file)
+
 async function endRoundOnline() {
     if (!isHost || !currentGameRoom) return;
+    
+    // Prevent multiple simultaneous calls
+    if (isEndingRound) {
+        console.log('endRoundOnline already in progress, skipping...');
+        return;
+    }
+    
+    isEndingRound = true;
+    console.log('🔒 STARTING endRoundOnline - locked');
     
     try {
         const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
@@ -3142,14 +3398,49 @@ async function endRoundOnline() {
             const playerIds = Object.keys(roomData.players);
             
             // Any remaining table cards go to last capturer
+            console.log('=== CHECKING REMAINING TABLE CARDS ===');
+            console.log('Table cards remaining:', gameState.tableCards.length);
+            console.log('Last capturer:', gameState.lastCapturer);
+            console.log('Player IDs:', playerIds);
+            
             if (gameState.tableCards.length > 0 && gameState.lastCapturer !== null) {
-                const lastCapturerId = playerIds[gameState.lastCapturer];
-                gameState.capturedCards[lastCapturerId].push(...gameState.tableCards);
+                console.log('Giving remaining table cards to last capturer:', gameState.lastCapturer);
+                console.log('Remaining table cards:', gameState.tableCards);
+                console.log('Last capturer captured cards before:', gameState.capturedCards[gameState.lastCapturer].length);
+                
+                gameState.capturedCards[gameState.lastCapturer].push(...gameState.tableCards);
                 gameState.tableCards = [];
+                
+                console.log('Last capturer captured cards after:', gameState.capturedCards[gameState.lastCapturer].length);
+                console.log('Table cards cleared, now:', gameState.tableCards.length);
+            } else if (gameState.tableCards.length > 0) {
+                console.log('WARNING: Table cards remain but no last capturer recorded!');
+                console.log('Remaining cards:', gameState.tableCards);
             }
             
             // Calculate round scores
             calculateRoundScoreOnline(gameState, playerIds);
+            
+            console.log('=== UPDATING FIREBASE WITH CALCULATED SCORES ===');
+            console.log('Updated scores:', gameState.scores);
+            console.log('Deal will be set to 6 to indicate round end');
+            
+            // Add a dedicated flag for round end that won't be overwritten
+            gameState.roundJustEnded = gameState.currentRound;
+            gameState.currentDeal = 6;
+            
+            console.log('🚨 SETTING ROUND END FLAG:', gameState.roundJustEnded);
+            
+            // Update Firebase with calculated scores FIRST so non-host can see them
+            await window.updateDoc(roomRef, {
+                gameState: gameState
+            });
+            
+            console.log('✅ FIREBASE UPDATED WITH ROUND-END SCORES AND FLAG');
+            
+            // Give non-host time to receive and process the round-end update
+            console.log('⏳ Waiting 5 seconds for non-host to process round-end scores...');
+            await new Promise(resolve => setTimeout(resolve, 5000));
             
             // Check if game is over
             const maxScore = Math.max(...Object.values(gameState.scores));
@@ -3180,17 +3471,45 @@ async function endRoundOnline() {
                 gameState.deck = createShuffledDeck();
                 dealInitialCardsOnline(gameState, playerIds);
                 
+                console.log('=== SENDING NEW ROUND TO FIREBASE ===');
+                console.log('New round number:', gameState.currentRound);
+                console.log('New deal number:', gameState.currentDeal);
+                console.log('Player hands dealt:', gameState.playerHands);
+                console.log('Table cards:', gameState.tableCards);
+                
                 await window.updateDoc(roomRef, {
                     gameState: gameState
                 });
+                
+                console.log('✅ NEW ROUND FIREBASE UPDATE COMPLETE');
+                console.log('Updated gameState.currentRound:', gameState.currentRound);
+                console.log('Updated gameState.currentDeal:', gameState.currentDeal);
             }
         }
     } catch (error) {
         console.error('Error ending round online:', error);
+    } finally {
+        isEndingRound = false;
+        console.log('🔓 FINISHED endRoundOnline - unlocked');
     }
 }
 
 function calculateRoundScoreOnline(gameState, playerIds) {
+    // Get current player info for popup display
+    const currentPlayerId = currentUser.uid;
+    const opponentId = playerIds.find(id => id !== currentPlayerId);
+    
+    // Track round scoring details for popup (similar to offline version)
+    const roundScoring = {
+        playerPoints: 0,
+        opponentPoints: 0,
+        details: []
+    };
+    
+    // Store old scores to calculate points gained this round
+    const oldPlayerScore = gameState.scores[currentPlayerId] || 0;
+    const oldOpponentScore = gameState.scores[opponentId] || 0;
+    
     playerIds.forEach(playerId => {
         const capturedCards = gameState.capturedCards[playerId];
         const cardCount = capturedCards.length;
@@ -3220,11 +3539,375 @@ function calculateRoundScoreOnline(gameState, playerIds) {
         // Special cards
         const hasTwo = capturedCards.some(card => card.suit === '♣' && card.value === '2');
         const hasTen = capturedCards.some(card => card.suit === '♦' && card.value === '10');
-        const hasAce = capturedCards.some(card => card.suit === '♠' && card.value === 'A');
         
-        if (hasTwo) gameState.scores[playerId] += 1;
-        if (hasTen) gameState.scores[playerId] += 2;
-        if (hasAce) gameState.scores[playerId] += 1;
+        if (hasTwo) gameState.scores[playerId] += 1;  // 2 of Clubs: 1 point
+        if (hasTen) gameState.scores[playerId] += 1;  // 10 of Diamonds: 1 point (not 2!)
+    });
+    
+    // Calculate points gained this round for popup display
+    const newPlayerScore = gameState.scores[currentPlayerId] || 0;
+    const newOpponentScore = gameState.scores[opponentId] || 0;
+    
+    roundScoring.playerPoints = newPlayerScore - oldPlayerScore;
+    roundScoring.opponentPoints = newOpponentScore - oldOpponentScore;
+    
+    // Create scoring details for popup
+    const playerCardCount = gameState.capturedCards[currentPlayerId].length;
+    const opponentCardCount = gameState.capturedCards[opponentId].length;
+    
+    // Most cards details
+    if (playerCardCount > opponentCardCount) {
+        roundScoring.details.push(`Most Cards: You get 2 points (${playerCardCount} vs ${opponentCardCount})`);
+    } else if (opponentCardCount > playerCardCount) {
+        roundScoring.details.push(`Most Cards: Opponent gets 2 points (${opponentCardCount} vs ${playerCardCount})`);
+    } else {
+        roundScoring.details.push(`Most Cards: Tied - both get 1 point (${playerCardCount} each)`);
+    }
+    
+    // Most clubs details
+    const playerClubs = gameState.capturedCards[currentPlayerId].filter(card => card.suit === '♣').length;
+    const opponentClubs = gameState.capturedCards[opponentId].filter(card => card.suit === '♣').length;
+    
+    if (playerClubs > opponentClubs) {
+        roundScoring.details.push(`Most Clubs: You get 1 point (${playerClubs} vs ${opponentClubs})`);
+    } else if (opponentClubs > playerClubs) {
+        roundScoring.details.push(`Most Clubs: Opponent gets 1 point (${opponentClubs} vs ${playerClubs})`);
+    }
+    
+    // Special cards details
+    const playerCards = gameState.capturedCards[currentPlayerId];
+    const opponentCards = gameState.capturedCards[opponentId];
+    
+    if (playerCards.some(card => card.suit === '♣' && card.value === '2')) {
+        roundScoring.details.push(`2 of Clubs: You get 1 point`);
+    } else if (opponentCards.some(card => card.suit === '♣' && card.value === '2')) {
+        roundScoring.details.push(`2 of Clubs: Opponent gets 1 point`);
+    }
+    
+    if (playerCards.some(card => card.suit === '♦' && card.value === '10')) {
+        roundScoring.details.push(`10 of Diamonds: You get 1 point`);
+    } else if (opponentCards.some(card => card.suit === '♦' && card.value === '10')) {
+        roundScoring.details.push(`10 of Diamonds: Opponent gets 1 point`);
+    }
+    
+
+    
+    // Update local game scores for immediate display
+    gameScore.player = newPlayerScore;
+    gameScore.opponent = newOpponentScore;
+    
+    // Update the UI to reflect new scores
+    updateGameUI();
+    
+    // Show the round score popup (same as offline version)
+    showRoundScorePopupGlobal(roundScoring);
+    
+    console.log(`Online Round ${currentRound} Score: Player ${newPlayerScore} - Opponent ${newOpponentScore}`);
+}
+
+// Guard to prevent multiple simultaneous calls to showOnlineRoundScorePopup
+// (variable declared at top of file)
+
+function showOnlineRoundScorePopup(gameState, playerIds, oldGameScore) {
+    // Prevent multiple simultaneous calls
+    if (isShowingRoundPopup) {
+        console.log('showOnlineRoundScorePopup already in progress, skipping...');
+        return;
+    }
+    
+    isShowingRoundPopup = true;
+    console.log('🔒 STARTING showOnlineRoundScorePopup - locked');
+    
+    console.log('=== SHOW ONLINE ROUND SCORE POPUP CALLED ===');
+    console.log('gameState:', gameState);
+    console.log('playerIds:', playerIds);
+    console.log('oldGameScore passed:', oldGameScore);
+    console.log('currentUser.uid:', currentUser?.uid);
+    
+    // Get current player info for popup display
+    const currentPlayerId = currentUser.uid;
+    const opponentId = playerIds.find(id => id !== currentPlayerId);
+    
+    console.log('currentPlayerId:', currentPlayerId);
+    console.log('opponentId:', opponentId);
+    
+    // Track round scoring details for popup (similar to offline version)
+    const roundScoring = {
+        playerPoints: 0,
+        opponentPoints: 0,
+        details: []
+    };
+    
+    // Use the authoritative scores calculated by the host (stored in gameState.scores)
+    const newPlayerScore = gameState.scores[currentPlayerId] || 0;
+    const newOpponentScore = gameState.scores[opponentId] || 0;
+    
+    console.log('=== USING AUTHORITATIVE SCORES FROM HOST ===');
+    console.log('Current local gameScore.player:', gameScore.player);
+    console.log('Current local gameScore.opponent:', gameScore.opponent);
+    console.log('New player score from gameState:', newPlayerScore);
+    console.log('New opponent score from gameState:', newOpponentScore);
+    
+    // Calculate points gained this round using the OLD scores passed from handleGameStateUpdate
+    // This ensures we get the correct difference for the popup display
+    const oldPlayerScore = oldGameScore ? oldGameScore.player || 0 : 0;
+    const oldOpponentScore = oldGameScore ? oldGameScore.opponent || 0 : 0;
+    
+    console.log('🎯 CALCULATING POINTS GAINED:');
+    console.log('   oldPlayerScore (from parameter):', oldPlayerScore);
+    console.log('   oldOpponentScore (from parameter):', oldOpponentScore);
+    console.log('   newPlayerScore (from Firebase):', newPlayerScore);
+    console.log('   newOpponentScore (from Firebase):', newOpponentScore);
+    
+    roundScoring.playerPoints = newPlayerScore - oldPlayerScore;
+    roundScoring.opponentPoints = newOpponentScore - oldOpponentScore;
+    
+    console.log('Points gained this round - Player:', roundScoring.playerPoints, 'Opponent:', roundScoring.opponentPoints);
+    
+    // Now update local game scores with authoritative scores from Firebase
+    gameScore.player = newPlayerScore;
+    gameScore.opponent = newOpponentScore;
+    
+    console.log('Updated gameScore after round calculation:', gameScore);
+    
+    // Update the UI to reflect new scores
+    updateGameUI();
+    
+    // Get captured cards data for display purposes only (not for calculation)
+    const playerCardCount = gameState.capturedCards[currentPlayerId].length;
+    const opponentCardCount = gameState.capturedCards[opponentId].length;
+    const playerClubs = gameState.capturedCards[currentPlayerId].filter(card => card.suit === '♣').length;
+    const opponentClubs = gameState.capturedCards[opponentId].filter(card => card.suit === '♣').length;
+    const playerCards = gameState.capturedCards[currentPlayerId];
+    const opponentCards = gameState.capturedCards[opponentId];
+    
+    // Create scoring details for popup display
+    // Most cards details
+    if (playerCardCount > opponentCardCount) {
+        roundScoring.details.push(`Most Cards: You get 2 points (${playerCardCount} vs ${opponentCardCount})`);
+    } else if (opponentCardCount > playerCardCount) {
+        roundScoring.details.push(`Most Cards: Opponent gets 2 points (${opponentCardCount} vs ${playerCardCount})`);
+    } else {
+        roundScoring.details.push(`Most Cards: Tied - both get 1 point (${playerCardCount} each)`);
+    }
+    
+    // Most clubs details
+    if (playerClubs > opponentClubs) {
+        roundScoring.details.push(`Most Clubs: You get 1 point (${playerClubs} vs ${opponentClubs})`);
+    } else if (opponentClubs > playerClubs) {
+        roundScoring.details.push(`Most Clubs: Opponent gets 1 point (${opponentClubs} vs ${playerClubs})`);
+    }
+    
+    // Special cards details
+    if (playerCards.some(card => card.suit === '♣' && card.value === '2')) {
+        roundScoring.details.push(`2 of Clubs: You get 1 point`);
+    } else if (opponentCards.some(card => card.suit === '♣' && card.value === '2')) {
+        roundScoring.details.push(`2 of Clubs: Opponent gets 1 point`);
+    }
+    
+    if (playerCards.some(card => card.suit === '♦' && card.value === '10')) {
+        roundScoring.details.push(`10 of Diamonds: You get 1 point`);
+    } else if (opponentCards.some(card => card.suit === '♦' && card.value === '10')) {
+        roundScoring.details.push(`10 of Diamonds: Opponent gets 1 point`);
+    }
+    
+    // Show the round score popup (same as offline version)
+    showRoundScorePopupGlobal(roundScoring);
+    
+    console.log(`Online Round Score Popup: Player +${roundScoring.playerPoints}, Opponent +${roundScoring.opponentPoints}`);
+    
+    // Unlock the popup guard
+    isShowingRoundPopup = false;
+    console.log('🔓 FINISHED showOnlineRoundScorePopup - unlocked');
+}
+
+// Global version of showRoundScorePopup for both offline and online games
+function showRoundScorePopupGlobal(roundScoring) {
+    // Create popup overlay
+    const popupOverlay = document.createElement('div');
+    popupOverlay.className = 'round-score-popup-overlay';
+    popupOverlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        backdrop-filter: blur(10px);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 10000;
+        animation: fadeIn 0.3s ease-out;
+    `;
+    
+    // Create popup content
+    const popupContent = document.createElement('div');
+    popupContent.className = 'round-score-popup-content';
+    popupContent.style.cssText = `
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%);
+        backdrop-filter: blur(20px);
+        border-radius: 20px;
+        padding: 30px 40px;
+        text-align: center;
+        box-shadow: 0 25px 50px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(255, 255, 255, 0.2);
+        max-width: 500px;
+        width: 90%;
+        margin: 20px;
+        animation: slideInUp 0.4s ease-out;
+    `;
+    
+    // Create content HTML
+    const totalPlayer = gameScore.player;
+    const totalOpponent = gameScore.opponent;
+    const isGameOver = totalPlayer >= 16 || totalOpponent >= 16;
+    
+    console.log('=== PROGRESS BAR DEBUG ===');
+    console.log('totalPlayer:', totalPlayer);
+    console.log('totalOpponent:', totalOpponent);
+    console.log('gameScore object:', gameScore);
+    console.log('Player progress calculation:', (totalPlayer / 16) * 50);
+    console.log('Opponent progress calculation:', (totalOpponent / 16) * 50);
+    
+    // Get opponent display name - check if online game
+    let opponentName = 'AI Opponent';
+    if (window.isOnlineGame && window.opponentData) {
+        opponentName = window.opponentData.username || 'Opponent';
+    }
+    
+    popupContent.innerHTML = `
+        <div style="margin-bottom: 25px;">
+            <h2 style="color: white; font-size: 1.8rem; font-weight: 700; margin-bottom: 10px;">
+                Round ${currentRound} ${isGameOver ? 'Final' : 'Complete'}!
+            </h2>
+            <p style="color: #64748b; font-size: 1rem;" id="round-countdown-text">
+                ${isGameOver ? 'Game Over!' : 'Starting next round in 5...'}
+            </p>
+        </div>
+        
+        <div style="background: rgba(255, 255, 255, 0.05); border-radius: 15px; padding: 20px; margin-bottom: 25px;">
+            <h3 style="color: white; font-size: 1.2rem; margin-bottom: 15px;">Round Scoring</h3>
+            
+            <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 20px; align-items: center; margin-bottom: 20px;">
+                <div style="text-align: center;">
+                    <div style="width: 80px; height: 80px; margin: 0 auto 15px auto; border-radius: 50%; overflow: hidden; border: 3px solid #10b981; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); display: flex; align-items: center; justify-content: center; font-size: 2rem; color: white; ${window.currentUserData?.profilePicture ? `background-image: url(${window.currentUserData.profilePicture}); background-size: cover; background-position: center; font-size: 0;` : ''}">${window.currentUserData?.profilePicture ? '' : '👤'}</div>
+                    <div style="color: white; font-size: 1rem; font-weight: 600; margin-bottom: 8px;">${currentUser?.displayName || 'You'}</div>
+                    <div style="color: #10b981; font-size: 1.6rem; font-weight: 700;">+${roundScoring.playerPoints}</div>
+                </div>
+                <div style="color: #64748b; font-size: 1.2rem; font-weight: 600;">VS</div>
+                <div style="text-align: center;">
+                    <div style="width: 80px; height: 80px; margin: 0 auto 15px auto; border-radius: 50%; overflow: hidden; border: 3px solid #ef4444; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); display: flex; align-items: center; justify-content: center; color: white; ${window.isOnlineGame && window.opponentData?.profilePicture ? `background-image: url(${window.opponentData.profilePicture}); background-size: cover; background-position: center; font-size: 0;` : ''}">
+                        ${window.isOnlineGame && window.opponentData?.profilePicture ? '' : (window.isOnlineGame ? '👤' : '🤖')}
+                    </div>
+                    <div style="color: white; font-size: 1rem; font-weight: 600; margin-bottom: 8px;">${opponentName}</div>
+                    <div style="color: #ef4444; font-size: 1.6rem; font-weight: 700;">+${roundScoring.opponentPoints}</div>
+                </div>
+            </div>
+           
+            <div style="border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 15px;">
+                ${roundScoring.details.map(detail => 
+                    `<div style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 8px; text-align: left;">${detail}</div>`
+                ).join('')}
+            </div>
+        </div>
+        
+        <div style="background: rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 15px; margin-bottom: 25px;">
+            <h4 style="color: white; font-size: 1rem; margin-bottom: 15px;">Total Score</h4>
+            
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                <div style="color: white; font-size: 1.3rem; font-weight: 600;">You: ${totalPlayer}</div>
+                <div style="color: white; font-size: 1.3rem; font-weight: 600;">${opponentName}: ${totalOpponent}</div>
+            </div>
+            
+                            <div style="position: relative; margin-bottom: 10px;">
+                    <div style="width: 100%; height: 12px; background: rgba(255, 255, 255, 0.1); border-radius: 6px; overflow: hidden; position: relative;">
+                        <div id="player-progress-bar" style="
+                            position: absolute;
+                            top: 0;
+                            left: 0;
+                            height: 100%;
+                            width: ${Math.min((totalPlayer / 16) * 50, 50)}%;
+                            background: #10b981;
+                            border-radius: 6px 0 0 6px;
+                            transition: width 0.8s ease-out;
+                        "></div>
+                        <div id="opponent-progress-bar" style="
+                            position: absolute;
+                            top: 0;
+                            right: 0;
+                            height: 100%;
+                            width: ${Math.min((totalOpponent / 16) * 50, 50)}%;
+                            background: #ef4444;
+                            border-radius: 0 6px 6px 0;
+                            transition: width 0.8s ease-out;
+                        "></div>
+                        <div style="
+                            position: absolute;
+                            top: 50%;
+                            left: 50%;
+                            transform: translate(-50%, -50%);
+                            width: 3px;
+                            height: 16px;
+                            background: white;
+                            border-radius: 2px;
+                            box-shadow: 0 0 4px rgba(0, 0, 0, 0.3);
+                        "></div>
+                    </div>
+                </div>
+            
+            <div style="color: #64748b; font-size: 0.8rem; text-align: center;">
+                ${isGameOver ? 'Final Score' : 'Playing to 16 points'}
+            </div>
+        </div>
+    `;
+    
+    popupOverlay.appendChild(popupContent);
+    document.body.appendChild(popupOverlay);
+    
+    // Debug progress bar elements after DOM insertion
+    setTimeout(() => {
+        const playerBar = document.getElementById('player-progress-bar');
+        const opponentBar = document.getElementById('opponent-progress-bar');
+        console.log('=== PROGRESS BAR DOM DEBUG ===');
+        console.log('Player bar element:', playerBar);
+        console.log('Player bar width style:', playerBar?.style.width);
+        console.log('Opponent bar element:', opponentBar);
+        console.log('Opponent bar width style:', opponentBar?.style.width);
+    }, 100);
+    
+    // Auto-close after 5 seconds with dynamic countdown
+    let countdown = 5;
+    const countdownText = document.getElementById('round-countdown-text');
+   
+    const countdownInterval = setInterval(() => {
+        countdown--;
+        if (countdownText && countdown > 0 && !isGameOver) {
+            countdownText.textContent = `Starting next round in ${countdown}...`;
+        }
+       
+        if (countdown <= 0) {
+            clearInterval(countdownInterval);
+            if (popupOverlay && popupOverlay.parentNode) {
+                popupOverlay.style.animation = 'fadeOut 0.3s ease-out';
+                setTimeout(() => {
+                    if (popupOverlay.parentNode) {
+                        popupOverlay.remove();
+                    }
+                }, 300);
+            }
+        }
+    }, 1000);
+    
+    // Allow manual close by clicking overlay
+    popupOverlay.addEventListener('click', (e) => {
+        if (e.target === popupOverlay) {
+            popupOverlay.style.animation = 'fadeOut 0.3s ease-out';
+            setTimeout(() => {
+                if (popupOverlay.parentNode) {
+                    popupOverlay.remove();
+                }
+            }, 300);
+        }
     });
 }
 
@@ -3948,6 +4631,11 @@ window.executeAction = function(action) {
 async function syncMoveToFirebase(action, playedCard, tableCardsSelected) {
     if (!currentGameRoom || !window.db) return;
     
+    console.log('=== SYNC MOVE TO FIREBASE ===');
+    console.log('Action:', action);
+    console.log('Played card:', playedCard.value + playedCard.suit);
+    console.log('Table cards selected:', tableCardsSelected);
+    
     try {
         const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
         const roomDoc = await window.getDoc(roomRef);
@@ -3957,6 +4645,9 @@ async function syncMoveToFirebase(action, playedCard, tableCardsSelected) {
         const roomData = roomDoc.data();
         const gameState = roomData.gameState;
         const currentPlayerId = currentUser.uid;
+        
+        console.log('Current player hand before move:', gameState.playerHands[currentPlayerId].length, 'cards');
+        console.log('Current table cards before move:', gameState.tableCards.length, 'cards');
         
         // Create updated game state
         const updatedGameState = { ...gameState };
@@ -3991,7 +4682,11 @@ async function syncMoveToFirebase(action, playedCard, tableCardsSelected) {
             updatedGameState.lastCapturer = currentPlayerId;
             updatedGameState.lastAction = 'capture';
             
-        } else {
+            console.log('=== CAPTURE RECORDED ===');
+            console.log('Player', currentPlayerId, 'captured cards');
+            console.log('Setting lastCapturer to:', currentPlayerId);
+            
+        } else if (action === 'lay') {
             // Handle lay
             updatedGameState.tableCards.push(playedCard);
             
@@ -4007,6 +4702,10 @@ async function syncMoveToFirebase(action, playedCard, tableCardsSelected) {
             }
             
             updatedGameState.lastAction = 'lay';
+            
+            console.log('=== LAY RECORDED ===');
+            console.log('Player', currentPlayerId, 'laid a card');
+            console.log('lastCapturer remains:', updatedGameState.lastCapturer);
         }
         
         // Switch turn
@@ -4015,15 +4714,29 @@ async function syncMoveToFirebase(action, playedCard, tableCardsSelected) {
         const nextIndex = (currentIndex + 1) % playerIds.length;
         updatedGameState.currentPlayer = nextIndex;
         
-        // Update scores if needed
-        // (Score calculation would happen here)
+        // Don't increment deal here - let dealNewHandOnline handle it
+        // Just log when hands become empty
+        const allHandsEmpty = playerIds.every(playerId => 
+            updatedGameState.playerHands[playerId].length === 0
+        );
+        
+        if (allHandsEmpty) {
+            console.log('All hands empty after move, currentDeal is', updatedGameState.currentDeal);
+            console.log('Host will handle dealing new cards or ending round');
+        }
         
         // Update in Firebase
         await window.updateDoc(roomRef, {
             gameState: updatedGameState
         });
         
+        console.log('=== FIREBASE UPDATE COMPLETE ===');
         console.log('Move synced to Firebase:', action, 'Card:', playedCard.value + playedCard.suit);
+        console.log('Updated player hand length:', updatedGameState.playerHands[currentPlayerId].length);
+        console.log('Updated table cards length:', updatedGameState.tableCards.length);
+        console.log('All hands empty?', playerIds.every(playerId => 
+            updatedGameState.playerHands[playerId].length === 0
+        ));
         
     } catch (error) {
         console.error('Error syncing move to Firebase:', error);
