@@ -3100,18 +3100,47 @@ function handleGameStateUpdate(newGameState) {
     
     console.log('✅ Successfully updated hands and captured cards');
     
-    // Update scores
+    // Store old deal value before updating
+    const previousDeal = currentDeal;
+    
+    // Always preserve current scores before any update for potential popup use
     const oldGameScore = { ...gameScore };
+    
+    // Initialize popup scores tracking if not exists
+    if (!window.popupScoresHistory) {
+        window.popupScoresHistory = { player: 0, opponent: 0 };
+    }
+    
+    // Update scores
+    const newPlayerScore = newGameState.scores[currentPlayerId] || 0;
+    const newOpponentScore = newGameState.scores[opponentId] || 0;
+    const scoresChanged = newPlayerScore !== gameScore.player || newOpponentScore !== gameScore.opponent;
+    
+    // Check if this is a round end update (deal went to 6 or round number increased)
+    const isRoundEndUpdate = (previousDeal < 6 && newGameState.currentDeal >= 6) || 
+                            (newGameState.currentRound > currentRound);
+    
+    console.log('🎯 SCORE TRACKING DEBUG:');
+    console.log('   oldGameScore:', oldGameScore);
+    console.log('   newPlayerScore:', newPlayerScore, 'newOpponentScore:', newOpponentScore);
+    console.log('   scoresChanged:', scoresChanged);
+    console.log('   isRoundEndUpdate:', isRoundEndUpdate);
+    console.log('   popupScoresHistory:', window.popupScoresHistory);
+    
+    // If scores changed during a round end update, preserve the baseline for popup
+    if (isRoundEndUpdate && scoresChanged) {
+        console.log('🎯 ROUND END - PRESERVING BASELINE SCORES FOR POPUP');
+        window.popupScoresForThisRound = { ...window.popupScoresHistory };
+        console.log('   Preserved baseline:', window.popupScoresForThisRound);
+    }
+    
     gameScore = {
-        player: newGameState.scores[currentPlayerId] || 0,
-        opponent: newGameState.scores[opponentId] || 0
+        player: newPlayerScore,
+        opponent: newOpponentScore
     };
     
     // Track if we need to show round score popup for non-host
     let shouldShowRoundPopup = false;
-    
-    // Store old deal value before updating
-    const previousDeal = currentDeal;
     
     console.log('✅ About to check popup conditions...');
     
@@ -3145,14 +3174,14 @@ function handleGameStateUpdate(newGameState) {
         const missedRoundEnd = newGameState.currentRound >= 2 && newGameState.currentDeal === 1 && (gameScore.player > 0 || gameScore.opponent > 0);
         
         // NEW: Check for dedicated round end flag
-        const roundEndFlagSet = newGameState.roundJustEnded && !window.processedRoundEndFlag;
+        const roundEndFlagSet = newGameState.roundJustEnded && window.processedRoundEndFlag !== newGameState.roundJustEnded;
         
         console.log('=== DETAILED POPUP CONDITIONS DEBUG ===');
         console.log('dealJustEnded calculation:', `${previousDeal} < 6 && ${newGameState.currentDeal} >= 6 = ${dealJustEnded}`);
         console.log('scoresChanged calculation:', `(${gameScore.player} !== ${oldGameScore.player}) || (${gameScore.opponent} !== ${oldGameScore.opponent}) = ${scoresChanged}`);
         console.log('roundChanged calculation:', `${newGameState.currentRound} > ${currentRound} = ${roundChanged}`);
         console.log('missedRoundEnd calculation:', `${newGameState.currentRound} >= 2 && ${newGameState.currentDeal} === 1 && (${gameScore.player} > 0 || ${gameScore.opponent} > 0) = ${missedRoundEnd}`);
-        console.log('🚨 NEW: roundEndFlagSet calculation:', `${newGameState.roundJustEnded} && !${window.processedRoundEndFlag} = ${roundEndFlagSet}`);
+        console.log('🚨 NEW: roundEndFlagSet calculation:', `${newGameState.roundJustEnded} && ${window.processedRoundEndFlag} !== ${newGameState.roundJustEnded} = ${roundEndFlagSet}`);
         console.log('Final condition result:', dealJustEnded || scoresChanged || roundChanged || missedRoundEnd || roundEndFlagSet);
         
         // Show popup when:
@@ -3184,34 +3213,40 @@ function handleGameStateUpdate(newGameState) {
         console.log('   shouldShowRoundPopup:', shouldShowRoundPopup);
     }
     
-    // Add flag to prevent multiple popups for the same round
-    if (!window.lastRoundPopupShown) {
-        window.lastRoundPopupShown = 0;
+    // Simple popup prevention - just track the last game state hash to prevent duplicates
+    const gameStateHash = `${newGameState.currentRound}-${gameScore.player}-${gameScore.opponent}`;
+    if (!window.lastPopupGameStateHash) {
+        window.lastPopupGameStateHash = '';
     }
-    
-    // Only show popup if we haven't shown it for this round yet
-    // For round endings: show popup for the round that just completed
-    // For new rounds: show popup for the previous round
-    const roundToShow = newGameState.currentRound > currentRound ? newGameState.currentRound - 1 : currentRound;
     
     console.log('🔍 POPUP PREVENTION DEBUG');
     console.log('   shouldShowRoundPopup:', shouldShowRoundPopup);
-    console.log('   window.lastRoundPopupShown:', window.lastRoundPopupShown);
-    console.log('   roundToShow:', roundToShow);
-    console.log('   condition result:', shouldShowRoundPopup && window.lastRoundPopupShown < roundToShow);
+    console.log('   gameStateHash:', gameStateHash);
+    console.log('   lastPopupGameStateHash:', window.lastPopupGameStateHash);
+    console.log('   condition result:', shouldShowRoundPopup && gameStateHash !== window.lastPopupGameStateHash);
     
-            if (shouldShowRoundPopup && window.lastRoundPopupShown < roundToShow) {
-            console.log('🎉 Showing round popup for round', roundToShow);
-            console.log('   shouldShowRoundPopup:', shouldShowRoundPopup);
-            console.log('   lastRoundPopupShown:', window.lastRoundPopupShown);
-            console.log('   roundToShow:', roundToShow);
-            window.lastRoundPopupShown = roundToShow;
-            showOnlineRoundScorePopup(newGameState, playerIds, oldGameScore);
-    } else if (shouldShowRoundPopup) {
-        console.log('❌ Popup blocked by prevention logic');
+    if (shouldShowRoundPopup && gameStateHash !== window.lastPopupGameStateHash) {
+        console.log('🎉 Showing round popup for current game state');
         console.log('   shouldShowRoundPopup:', shouldShowRoundPopup);
-        console.log('   lastRoundPopupShown:', window.lastRoundPopupShown);
-        console.log('   roundToShow:', roundToShow);
+        console.log('   gameStateHash:', gameStateHash);
+        console.log('   lastPopupGameStateHash:', window.lastPopupGameStateHash);
+        window.lastPopupGameStateHash = gameStateHash;
+        
+        // Use preserved baseline scores for accurate popup calculation
+        const scoresForPopup = window.popupScoresForThisRound || window.popupScoresHistory;
+        console.log('🎯 USING SCORES FOR POPUP:', scoresForPopup);
+        console.log('🎯 CURRENT SCORES:', gameScore);
+        showOnlineRoundScorePopup(newGameState, playerIds, scoresForPopup);
+        
+        // Update history to current scores after showing popup
+        window.popupScoresHistory = { ...gameScore };
+        window.popupScoresForThisRound = null;
+        console.log('🎯 UPDATED HISTORY TO:', window.popupScoresHistory);
+    } else if (shouldShowRoundPopup) {
+        console.log('❌ Popup blocked by prevention logic - same game state');
+        console.log('   shouldShowRoundPopup:', shouldShowRoundPopup);
+        console.log('   gameStateHash:', gameStateHash);
+        console.log('   lastPopupGameStateHash:', window.lastPopupGameStateHash);
     } else {
         console.log('❌ shouldShowRoundPopup is false - no popup needed');
     }
@@ -3255,17 +3290,11 @@ function handleGameStateUpdate(newGameState) {
     currentDeal = newGameState.currentDeal;
     
     // Show round popup if needed (before checking empty hands)
+    // NOTE: This code path should not be reached anymore since popup is handled above
+    // Removing this duplicate popup call that was causing incorrect score calculations
     if (shouldShowRoundPopup) {
-        console.log('🎉 Showing round score popup for non-host...');
-        showOnlineRoundScorePopup(newGameState, playerIds);
-        // Update visuals and exit to prevent further processing
-        updateGameDisplay();
-        createAndAnimateCards();
-        updateGameUI();
-        updateCardVisuals();
-        isHandlingGameStateUpdate = false;
-        console.log('🔓 FINISHED handleGameStateUpdate (popup shown) - unlocked');
-        return;
+        console.log('⚠️  LEGACY POPUP PATH - This should not be reached anymore');
+        console.log('   Popup should have been handled in the main popup logic above');
     }
     
     // Check for empty hands (need new deal or round end)
