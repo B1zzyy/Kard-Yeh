@@ -33,6 +33,22 @@ body::before {
     100% { background-position: 200px 200px, -150px -150px, 60px 60px, -60px -60px; }
 }
 
+@keyframes pulse {
+    0% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.7; transform: scale(1.05); }
+    100% { opacity: 1; transform: scale(1); }
+}
+
+.card.not-your-turn {
+    cursor: not-allowed !important;
+    transition: all 0.3s ease;
+}
+
+.card.not-your-turn:hover {
+    transform: none !important;
+    box-shadow: none !important;
+}
+
 .main-menu {
     display: flex;
     flex-direction: column;

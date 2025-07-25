@@ -748,6 +748,33 @@ function playCard(cardIndex) {
     console.log('playerHand length:', playerHand.length);
     console.log('currentPlayer:', currentPlayer);
     
+    // Check if it's the player's turn
+    if (window.isOnlineGame) {
+        // In online games, determine if it's the current user's turn
+        const playerIds = getConsistentPlayerIds(window.onlineGameRoom);
+        const currentPlayerId = currentUser.uid;
+        const myPlayerIndex = playerIds.indexOf(currentPlayerId);
+        
+        console.log('=== TURN VALIDATION ===');
+        console.log('Player IDs (consistent):', playerIds);
+        console.log('Current player ID:', currentPlayerId);
+        console.log('My player index:', myPlayerIndex);
+        console.log('Game currentPlayer:', currentPlayer);
+        console.log('Is my turn?', currentPlayer === myPlayerIndex);
+        
+        if (currentPlayer !== myPlayerIndex) {
+            console.log('❌ NOT YOUR TURN - Ignoring card play');
+            showGameEndMessage("It's not your turn!", 'warning');
+            return;
+        }
+    } else {
+        // In local games, player is always index 0
+        if (currentPlayer !== 0) {
+            console.log('❌ NOT PLAYER TURN (AI turn) - Ignoring card play');
+            return;
+        }
+    }
+    
     if (selectedPlayerCard === cardIndex) {
         // Deselect card
         selectedPlayerCard = null;
@@ -1065,8 +1092,30 @@ function updateGameUI() {
     const dealIndicator = document.querySelector('.deal-indicator');
     
     if (currentPlayerElement) {
-        currentPlayerElement.textContent = currentPlayer === 0 ? "Your Turn" : "Opponent's Turn";
-        currentPlayerElement.style.color = currentPlayer === 0 ? '#10b981' : '#f59e0b';
+        // Enhanced turn indicator for online games
+        if (window.isOnlineGame) {
+            const playerIds = getConsistentPlayerIds(window.onlineGameRoom);
+            const currentPlayerId = currentUser?.uid;
+            const myPlayerIndex = playerIds.indexOf(currentPlayerId);
+            const isMyTurn = currentPlayer === myPlayerIndex;
+            
+            if (isMyTurn) {
+                currentPlayerElement.textContent = "YOUR TURN";
+                currentPlayerElement.style.color = '#10b981';
+                currentPlayerElement.style.fontWeight = 'bold';
+                currentPlayerElement.style.animation = 'pulse 2s infinite';
+            } else {
+                const opponentName = window.opponentData?.username || 'Opponent';
+                currentPlayerElement.textContent = `${opponentName.toUpperCase()}'S TURN`;
+                currentPlayerElement.style.color = '#f59e0b';
+                currentPlayerElement.style.fontWeight = 'normal';
+                currentPlayerElement.style.animation = 'none';
+            }
+        } else {
+            // Local game turn indicator
+            currentPlayerElement.textContent = currentPlayer === 0 ? "Your Turn" : "Opponent's Turn";
+            currentPlayerElement.style.color = currentPlayer === 0 ? '#10b981' : '#f59e0b';
+        }
     }
     
     if (playerScoreElement) playerScoreElement.textContent = gameScore.player;
@@ -1181,15 +1230,49 @@ function updateGameDisplay() {
     updateOpponentAvatarInGameUI();
 }
 
+// Helper function to get consistent player order
+function getConsistentPlayerIds(roomData) {
+    const playerIds = Object.keys(roomData.players);
+    // Sort by creation order: host (createdBy) first, then others
+    return playerIds.sort((a, b) => {
+        if (a === roomData.createdBy) return -1;
+        if (b === roomData.createdBy) return 1;
+        return a.localeCompare(b); // Consistent alphabetical order for others
+    });
+}
+
 // updateCardVisuals function - moved to top for online multiplayer access
 function updateCardVisuals() {
     const playerCards = document.querySelectorAll('#player-cards .card');
     const tableCards = document.querySelectorAll('#table-cards .card');
     
-    // Update player cards - remove all turn-based restrictions
+    // Check if it's the player's turn
+    let isMyTurn = true;
+    if (window.isOnlineGame) {
+        const playerIds = getConsistentPlayerIds(window.onlineGameRoom);
+        const currentPlayerId = currentUser?.uid;
+        const myPlayerIndex = playerIds.indexOf(currentPlayerId);
+        isMyTurn = currentPlayer === myPlayerIndex;
+    } else {
+        isMyTurn = currentPlayer === 0; // In local games, player is index 0
+    }
+    
+    // Update player cards with turn-based restrictions
     playerCards.forEach((card, index) => {
-        card.classList.remove('selected', 'disabled');
-        card.removeAttribute('disabled');
+        card.classList.remove('selected', 'disabled', 'not-your-turn');
+        
+        if (!isMyTurn) {
+            // Not player's turn - disable all cards
+            card.classList.add('not-your-turn');
+            card.style.opacity = '1';
+            card.style.filter = 'grayscale(70%) brightness(0.6)';
+            card.style.pointerEvents = 'none';
+        } else {
+            // Player's turn - enable cards
+            card.style.opacity = '1';
+            card.style.filter = 'none';
+            card.style.pointerEvents = 'auto';
+        }
         
         if (selectedPlayerCard === index) {
             card.classList.add('selected');
@@ -2913,14 +2996,14 @@ async function startGameForRoom() {
     
     try {
         console.log('Initializing game state...');
-        // Initialize game state with random starting player
-        const randomStartingPlayer = Math.floor(Math.random() * 2); // 0 or 1
-        console.log('Random starting player selected:', randomStartingPlayer);
+        // HOST ALWAYS STARTS ROUND 1 - this ensures proper turn order
+        const hostStartsFirstRound = 0; // Host is always at index 0 in playerIds array
+        console.log('Host starting first round, player index:', hostStartsFirstRound);
         
         const gameState = {
             currentRound: 1,
             currentDeal: 1,
-            currentPlayer: randomStartingPlayer,
+            currentPlayer: hostStartsFirstRound,
             deck: createShuffledDeck(),
             tableCards: [],
             playerHands: {},
@@ -2934,7 +3017,7 @@ async function startGameForRoom() {
         const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
         const roomDoc = await window.getDoc(roomRef);
         const roomData = roomDoc.data();
-        const playerIds = Object.keys(roomData.players);
+        const playerIds = getConsistentPlayerIds(roomData);
         
         console.log('Player IDs:', playerIds);
         console.log('Room created by:', roomData.createdBy);
@@ -3010,7 +3093,7 @@ function startOnlineGame(roomData) {
     
     // Initialize local game state from server
     const gameState = roomData.gameState;
-    const playerIds = Object.keys(roomData.players);
+    const playerIds = getConsistentPlayerIds(roomData);
     const currentPlayerId = currentUser.uid;
     const opponentId = playerIds.find(id => id !== currentPlayerId);
     
@@ -3118,7 +3201,7 @@ function handleGameStateUpdate(newGameState) {
     console.log('Current playerHand before update:', playerHand.length, 'cards');
     console.log('New game state playerHands:', newGameState.playerHands);
     
-    const playerIds = Object.keys(window.onlineGameRoom.players);
+    const playerIds = getConsistentPlayerIds(window.onlineGameRoom);
     const currentPlayerId = currentUser.uid;
     const opponentId = playerIds.find(id => id !== currentPlayerId);
     
@@ -3402,7 +3485,7 @@ async function dealNewHandOnline() {
         if (roomDoc.exists()) {
             const roomData = roomDoc.data();
             const gameState = roomData.gameState;
-            const playerIds = Object.keys(roomData.players);
+            const playerIds = getConsistentPlayerIds(roomData);
             
             console.log('Current deal before increment:', gameState.currentDeal);
             console.log('Deck cards remaining:', gameState.deck.length);
@@ -3427,6 +3510,16 @@ async function dealNewHandOnline() {
             gameState.currentDeal++;
             console.log(`Deal incremented from ${oldDeal} to ${gameState.currentDeal}`);
             console.log('Deck cards remaining after dealing:', gameState.deck.length);
+            
+            // RESET TURN ORDER: When dealing new hands within a round, 
+            // the turn goes back to whoever started this round
+            const roundStartingPlayer = (gameState.currentRound - 1) % 2;
+            gameState.currentPlayer = roundStartingPlayer;
+            
+            console.log('=== NEW HAND TURN RESET ===');
+            console.log('Round number:', gameState.currentRound);
+            console.log('Turn reset to round starter:', roundStartingPlayer);
+            console.log('Player ID who starts:', playerIds[roundStartingPlayer]);
             
             await window.updateDoc(roomRef, {
                 gameState: gameState
@@ -3466,7 +3559,7 @@ async function endRoundOnline() {
         if (roomDoc.exists()) {
             const roomData = roomDoc.data();
             const gameState = roomData.gameState;
-            const playerIds = Object.keys(roomData.players);
+            const playerIds = getConsistentPlayerIds(roomData);
             
             // Any remaining table cards go to last capturer
             console.log('=== CHECKING REMAINING TABLE CARDS ===');
@@ -3544,7 +3637,20 @@ async function endRoundOnline() {
                 // Start new round
                 gameState.currentRound++;
                 gameState.currentDeal = 1;
-                gameState.currentPlayer = 0;
+                
+                // PROPER TURN ORDER: Host starts round 1, then alternate each round
+                // Round 1: Host (index 0) starts
+                // Round 2: Non-host (index 1) starts  
+                // Round 3: Host (index 0) starts again, etc.
+                const hostIndex = 0; // Host is always at index 0 in playerIds array
+                const roundStartingPlayer = (gameState.currentRound - 1) % 2;
+                gameState.currentPlayer = roundStartingPlayer;
+                
+                console.log('=== NEW ROUND TURN ORDER ===');
+                console.log('Round number:', gameState.currentRound);
+                console.log('Starting player index:', roundStartingPlayer);
+                console.log('Starting player ID:', playerIds[roundStartingPlayer]);
+                console.log('Is host starting?', roundStartingPlayer === hostIndex);
                 
                 // Reset captured cards
                 playerIds.forEach(playerId => {
@@ -4046,7 +4152,7 @@ async function testEndOnlineGame() {
         
         if (roomDoc.exists()) {
             const roomData = roomDoc.data();
-            const playerIds = Object.keys(roomData.players);
+            const playerIds = getConsistentPlayerIds(roomData);
             
             // Set current user as winner for testing
             const winnerId = currentUser.uid;
@@ -4897,11 +5003,17 @@ async function syncMoveToFirebase(action, playedCard, tableCardsSelected) {
             console.log('lastCapturer remains:', updatedGameState.lastCapturer);
         }
         
-        // Switch turn
-        const playerIds = Object.keys(roomData.players);
+        // Switch turn - alternate between players
+        const playerIds = getConsistentPlayerIds(roomData);
         const currentIndex = playerIds.indexOf(currentPlayerId);
         const nextIndex = (currentIndex + 1) % playerIds.length;
         updatedGameState.currentPlayer = nextIndex;
+        
+        console.log('=== TURN SWITCH ===');
+        console.log('Current player ID:', currentPlayerId);
+        console.log('Current player index:', currentIndex);
+        console.log('Next player index:', nextIndex);
+        console.log('Next player ID:', playerIds[nextIndex]);
         
         // Don't increment deal here - let dealNewHandOnline handle it
         // Just log when hands become empty
@@ -7344,7 +7456,7 @@ async function forfeitOnlineGame() {
             
             if (roomDoc.exists()) {
                 const roomData = roomDoc.data();
-                const playerIds = Object.keys(roomData.players);
+                const playerIds = getConsistentPlayerIds(roomData);
                 const opponentId = playerIds.find(id => id !== currentUser.uid);
                 
                 await window.updateDoc(roomRef, {
