@@ -1011,6 +1011,22 @@ function createGameUI() {
             <button class="action-btn primary" id="capture-btn" onclick="executeAction('capture')">Capture</button>
             <button class="action-btn" id="lay-btn" onclick="executeAction('lay')">Lay Card</button>
         </div>
+        
+        <!-- Test button for online games -->
+        ${window.isOnlineGame ? `
+            <div style="position: fixed; top: 10px; right: 10px; z-index: 9999;">
+                <button id="test-end-game" style="
+                    background: #ff4444;
+                    color: white;
+                    border: none;
+                    padding: 10px 15px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-weight: bold;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+                ">TEST: End Game</button>
+            </div>
+        ` : ''}
     `;
     
     gameUI.appendChild(gameInfo);
@@ -1019,6 +1035,17 @@ function createGameUI() {
     const gameArea = document.getElementById('game-area');
     if (gameArea) {
         gameArea.appendChild(gameUI);
+    }
+    
+    // Add test button event handler for online games
+    if (window.isOnlineGame) {
+        const testEndButton = document.getElementById('test-end-game');
+        if (testEndButton) {
+            testEndButton.addEventListener('click', () => {
+                console.log('TEST: Forcing game end...');
+                testEndOnlineGame();
+            });
+        }
     }
     
     // Update player avatar if available
@@ -3041,9 +3068,17 @@ function startOnlineGame(roomData) {
 function listenToGameStateChanges() {
     if (!currentGameRoom || !window.db) return;
     
+    // Clean up existing listener first
+    if (window.gameStateListener) {
+        console.log('Cleaning up existing game state listener');
+        window.gameStateListener();
+        window.gameStateListener = null;
+    }
+    
     const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
     
-    window.onSnapshot(roomRef, (doc) => {
+    console.log('Setting up game state listener for room:', currentGameRoom);
+    window.gameStateListener = window.onSnapshot(roomRef, (doc) => {
         if (doc.exists()) {
             const roomData = doc.data();
             
@@ -3061,6 +3096,12 @@ function listenToGameStateChanges() {
 function handleGameStateUpdate(newGameState) {
     console.log('🔥🔥🔥 FUNCTION CALLED - handleGameStateUpdate ENTRY POINT 🔥🔥🔥');
     if (!window.isOnlineGame) return;
+    
+    // Prevent processing if game has ended
+    if (window.gameEndHandled) {
+        console.log('Game has ended, ignoring game state update');
+        return;
+    }
     
     // Force reset the guard if it's been locked for too long
     if (isHandlingGameStateUpdate) {
@@ -3330,8 +3371,9 @@ function handleGameStateUpdate(newGameState) {
     // Log UI update for debugging
     console.log('UI updated - Current scores:', gameScore.player, 'vs', gameScore.opponent);
     
-    // Check for game end
-    if (gameScore.player >= 16 || gameScore.opponent >= 16) {
+    // Check for game end - only host should handle ending the game
+    if ((gameScore.player >= 16 || gameScore.opponent >= 16) && isHost) {
+        console.log('Game end detected by host, ending online game...');
         endOnlineGame();
     }
     
@@ -3474,17 +3516,30 @@ async function endRoundOnline() {
             // Check if game is over
             const maxScore = Math.max(...Object.values(gameState.scores));
             if (maxScore >= 16) {
+                console.log('Game over detected in endRoundOnline, max score:', maxScore);
+                
+                // Check if game is already finished to prevent duplicate calls
+                const currentRoomDoc = await window.getDoc(roomRef);
+                if (currentRoomDoc.exists() && currentRoomDoc.data().status === 'finished') {
+                    console.log('Game already finished, skipping duplicate end game call');
+                    return;
+                }
+                
                 // Game over
                 const winnerId = Object.keys(gameState.scores).find(
                     playerId => gameState.scores[playerId] === maxScore
                 );
                 
+                console.log('Setting game status to finished with winner:', winnerId);
                 await window.updateDoc(roomRef, {
                     status: 'finished',
                     winner: winnerId,
                     finishedAt: new Date(),
                     gameState: gameState
                 });
+                
+                console.log('Game successfully ended from endRoundOnline');
+                return; // Exit early, don't start new round
             } else {
                 // Start new round
                 gameState.currentRound++;
@@ -3944,6 +3999,7 @@ async function endOnlineGame() {
     if (!isHost || !currentGameRoom) return;
     
     try {
+        console.log('Host ending online game...');
         const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
         const roomDoc = await window.getDoc(roomRef);
         
@@ -3951,18 +4007,71 @@ async function endOnlineGame() {
             const roomData = roomDoc.data();
             const gameState = roomData.gameState;
             
+            // Prevent multiple end game calls
+            if (roomData.status === 'finished') {
+                console.log('Game already finished, skipping end game');
+                return;
+            }
+            
             const winnerId = Object.keys(gameState.scores).find(
                 playerId => gameState.scores[playerId] >= 16
             );
             
+            console.log('Updating room status to finished with winner:', winnerId);
             await window.updateDoc(roomRef, {
                 status: 'finished',
                 winner: winnerId,
-                finishedAt: new Date()
+                finishedAt: new Date(),
+                gameState: gameState
             });
+            
+            console.log('Game successfully ended by host');
         }
     } catch (error) {
         console.error('Error ending online game:', error);
+    }
+}
+
+// Test function to quickly end online games for debugging
+async function testEndOnlineGame() {
+    if (!currentGameRoom || !window.isOnlineGame) {
+        console.log('No active online game to end');
+        return;
+    }
+    
+    try {
+        console.log('TEST: Forcing online game to end...');
+        const roomRef = window.doc(window.db, 'gameRooms', currentGameRoom);
+        const roomDoc = await window.getDoc(roomRef);
+        
+        if (roomDoc.exists()) {
+            const roomData = roomDoc.data();
+            const playerIds = Object.keys(roomData.players);
+            
+            // Set current user as winner for testing
+            const winnerId = currentUser.uid;
+            
+            // Force set high scores to trigger game end
+            const testGameState = {
+                ...roomData.gameState,
+                scores: {
+                    [playerIds[0]]: playerIds[0] === winnerId ? 16 : 10,
+                    [playerIds[1]]: playerIds[1] === winnerId ? 16 : 10
+                }
+            };
+            
+            console.log('TEST: Setting game status to finished with winner:', winnerId);
+            await window.updateDoc(roomRef, {
+                status: 'finished',
+                winner: winnerId,
+                finishedAt: new Date(),
+                gameState: testGameState
+            });
+            
+            console.log('TEST: Game successfully ended');
+        }
+    } catch (error) {
+        console.error('TEST: Error ending online game:', error);
     }
 }
 
@@ -4010,11 +4119,37 @@ function handleGameRoomDeleted() {
 }
 
 function handleOnlineGameEnd(roomData) {
+    console.log('Handling online game end...');
+    
+    // Prevent multiple calls
+    if (window.gameEndHandled) {
+        console.log('Game end already handled, skipping');
+        return;
+    }
+    window.gameEndHandled = true;
+    
     const winner = roomData.winner;
     const isWinner = winner === currentUser.uid;
     
+    console.log('Game ended - Winner:', winner, 'Is current user winner:', isWinner);
+    
+    // Clean up listeners first to prevent further updates
+    if (gameRoomListener) {
+        console.log('Cleaning up game room listener');
+        gameRoomListener();
+        gameRoomListener = null;
+    }
+    
+    // Clean up game state listener if it exists
+    if (window.gameStateListener) {
+        console.log('Cleaning up game state listener');
+        window.gameStateListener();
+        window.gameStateListener = null;
+    }
+    
     // Handle rewards
     if (isWinner) {
+        console.log('Player won, adding coin reward');
         window.pendingCoinReward = 3000;
         addCoins(3000);
     }
@@ -4022,18 +4157,21 @@ function handleOnlineGameEnd(roomData) {
     // Update stats
     updateUserStats(isWinner);
     
-    // Show winning popup
-    showOnlineGameEndPopup(isWinner, roomData);
-    
-    // Clean up
-    if (gameRoomListener) {
-        gameRoomListener();
-        gameRoomListener = null;
-    }
-    
+    // Reset game state variables
     currentGameRoom = null;
     isHost = false;
     window.isOnlineGame = false;
+    window.opponentData = null;
+    
+    // Clear any pending timeouts or intervals
+    if (window.gameUpdateTimeout) {
+        clearTimeout(window.gameUpdateTimeout);
+        window.gameUpdateTimeout = null;
+    }
+    
+    // Show winning popup
+    console.log('Showing game end popup');
+    showOnlineGameEndPopup(isWinner, roomData);
 }
 
 function showOnlineGameEndPopup(isWinner, roomData) {
@@ -4097,6 +4235,7 @@ function showOnlineGameEndPopup(isWinner, roomData) {
     
     document.getElementById('return-dashboard').addEventListener('click', () => {
         popup.remove();
+        cleanupOnlineGame(); // Ensure cleanup
         showUserDashboard();
     });
     
@@ -4104,6 +4243,7 @@ function showOnlineGameEndPopup(isWinner, roomData) {
     setTimeout(() => {
         if (popup.parentNode) {
             popup.remove();
+            cleanupOnlineGame(); // Ensure cleanup
             showUserDashboard();
         }
     }, 10000);
@@ -4121,9 +4261,19 @@ async function cleanupOnlineGame() {
     if (!currentGameRoom) return;
     
     try {
+        console.log('Cleaning up online game...');
+        
+        // Clean up all listeners
         if (gameRoomListener) {
+            console.log('Cleaning up game room listener');
             gameRoomListener();
             gameRoomListener = null;
+        }
+        
+        if (window.gameStateListener) {
+            console.log('Cleaning up game state listener');
+            window.gameStateListener();
+            window.gameStateListener = null;
         }
         
         // If we're the host and game hasn't started, delete the room
@@ -4131,10 +4281,20 @@ async function cleanupOnlineGame() {
             await window.deleteDoc(window.doc(window.db, 'gameRooms', currentGameRoom));
         }
         
+        // Reset all game state variables
         currentGameRoom = null;
         isHost = false;
         window.isOnlineGame = false;
-        window.opponentData = null; // Clear opponent data
+        window.opponentData = null;
+        window.gameEndHandled = false; // Reset for next game
+        
+        // Clear any pending timeouts
+        if (window.gameUpdateTimeout) {
+            clearTimeout(window.gameUpdateTimeout);
+            window.gameUpdateTimeout = null;
+        }
+        
+        console.log('Online game cleanup completed');
         
     } catch (error) {
         console.error('Error cleaning up online game:', error);
