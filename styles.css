@@ -561,7 +561,7 @@ body::before {
      height: 252px;
      border-radius: 14px;
      position: absolute;
-     transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+     /* Removed CSS transition - GSAP handles all animations */
      box-shadow: 
          0 12px 35px rgba(0, 0, 0, 0.5),
          0 6px 15px rgba(0, 0, 0, 0.4);
@@ -776,16 +776,12 @@ body::before {
  
  .table-card.suggested {
      border-color: rgba(255, 255, 0, 0.8);
-     animation: pulse 1s infinite;
      box-shadow: 
          0 8px 16px rgba(0, 0, 0, 0.3),
          0 0 15px rgba(255, 255, 0, 0.4);
  }
  
- @keyframes pulse {
-     0%, 100% { transform: scale(1); }
-     50% { transform: scale(1.05); }
- }
+ /* Removed pulse animation that was causing enlarging/shifting */
 
 /* Player card interaction states */
 .card.playable {

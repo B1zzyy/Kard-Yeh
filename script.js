@@ -890,6 +890,42 @@ function positionCardsInHand(cards, isPlayer) {
             zIndex: originalTransform.zIndex,
             transformOrigin: "bottom center"
         });
+        
+        // Add hover effects for player cards
+        if (isPlayer) {
+            // Remove any existing event listeners to prevent duplicates
+            if (card._mouseEnterHandler) {
+                card.removeEventListener('mouseenter', card._mouseEnterHandler);
+            }
+            if (card._mouseLeaveHandler) {
+                card.removeEventListener('mouseleave', card._mouseLeaveHandler);
+            }
+            
+            // Create new event handlers that capture the current originalTransform
+            const currentOriginalTransform = { ...originalTransform };
+            
+            card._mouseEnterHandler = () => {
+                gsap.killTweensOf(card);
+                gsap.to(card, {
+                    duration: 0.15,
+                    y: currentOriginalTransform.y - 12, // Move up slightly - only change y position
+                    ease: "power2.out"
+                });
+            };
+            
+            card._mouseLeaveHandler = () => {
+                gsap.killTweensOf(card);
+                gsap.to(card, {
+                    duration: 0.15,
+                    y: currentOriginalTransform.y, // Return to original position
+                    ease: "power2.out"
+                });
+            };
+            
+            // Add the new event listeners
+            card.addEventListener('mouseenter', card._mouseEnterHandler);
+            card.addEventListener('mouseleave', card._mouseLeaveHandler);
+        }
     });
 }
 
@@ -931,42 +967,6 @@ function positionTableCards(cards) {
             zIndex: originalTransform.zIndex,
             transformOrigin: "center"
         });
-        
-        // Add hover effects with stored transform reference
-        const currentOriginalTransform = { ...originalTransform };
-        
-        card._tableMouseEnterHandler = () => {
-            gsap.killTweensOf(card);
-            gsap.to(card, {
-                duration: 0.05,
-                x: currentOriginalTransform.x,
-                y: currentOriginalTransform.y - 8,
-                rotation: currentOriginalTransform.rotation,
-                scale: currentOriginalTransform.scale,
-                ease: "power2.out"
-            });
-            
-            card.style.boxShadow = '0 3px 12px rgba(34, 197, 94, 0.25), 0 0 0 1px rgba(34, 197, 94, 0.15)';
-        };
-        
-        card._tableMouseLeaveHandler = () => {
-            if (!card.classList.contains('selected')) {
-                gsap.killTweensOf(card);
-                gsap.to(card, {
-                    duration: 0.05,
-                    x: currentOriginalTransform.x,
-                    y: currentOriginalTransform.y,
-                    rotation: currentOriginalTransform.rotation,
-                    scale: currentOriginalTransform.scale,
-                    ease: "power2.out"
-                });
-                
-                card.style.boxShadow = '';
-            }
-        };
-        
-        card.addEventListener('mouseenter', card._tableMouseEnterHandler);
-        card.addEventListener('mouseleave', card._tableMouseLeaveHandler);
     });
 }
 
@@ -5580,57 +5580,7 @@ function executeAITurn() {
                 transformOrigin: "bottom center"
             });
            
-            // Enhanced hover effects for player cards with proper position restoration
-            if (isPlayer) {
-                // Remove any existing event listeners to prevent duplicates
-                if (card._mouseEnterHandler) {
-                    card.removeEventListener('mouseenter', card._mouseEnterHandler);
-                }
-                if (card._mouseLeaveHandler) {
-                    card.removeEventListener('mouseleave', card._mouseLeaveHandler);
-                }
-                
-                // Create new event handlers that capture the current originalTransform
-                const currentOriginalTransform = { ...originalTransform };
-                
-                card._mouseEnterHandler = () => {
-                    // Kill any existing animations before starting new one
-                    gsap.killTweensOf(card);
-                    gsap.to(card, {
-                        duration: 0.05, // Ultra fast hover response
-                        x: currentOriginalTransform.x, // Keep X position fixed
-                        y: currentOriginalTransform.y - 15, // Move up slightly
-                        rotation: currentOriginalTransform.rotation, // Keep original rotation
-                        scale: currentOriginalTransform.scale, // Keep original scale - no scaling
-                        // Don't change zIndex at all
-                        ease: "power2.out"
-                    });
-                    
-                    // Much more subtle glow effect
-                    card.style.boxShadow = '0 2px 8px rgba(59, 130, 246, 0.15), 0 0 0 1px rgba(59, 130, 246, 0.08)';
-                };
-                
-                card._mouseLeaveHandler = () => {
-                    // Kill any existing animations before starting new one
-                    gsap.killTweensOf(card);
-                    gsap.to(card, {
-                        duration: 0.02, // Ultra ultra fast return
-                        x: currentOriginalTransform.x, // Return to exact original X position
-                        y: currentOriginalTransform.y, // Return to exact original Y position  
-                        rotation: currentOriginalTransform.rotation, // Return to exact original rotation
-                        scale: currentOriginalTransform.scale, // Return to exact original scale
-                        // Don't change zIndex back - keep original layering
-                        ease: "power2.out"
-                    });
-                    
-                    // Remove glow effect
-                    card.style.boxShadow = '';
-                };
-                
-                // Add the new event listeners
-                card.addEventListener('mouseenter', card._mouseEnterHandler);
-                card.addEventListener('mouseleave', card._mouseLeaveHandler);
-            }
+            // Hover effects for player cards are now handled in the main positionCardsInHand function
         });
     }
 
